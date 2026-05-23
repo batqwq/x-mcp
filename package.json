@@ -1,0 +1,52 @@
+{
+  "name": "x-post-mcp-server",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for reading X/Twitter posts through TwitterAPI.io and GetXAPI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/batqwq/x-mcp.git"
+  },
+  "homepage": "https://github.com/batqwq/x-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/batqwq/x-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "x",
+    "twitter",
+    "twitterapi.io",
+    "getxapi",
+    "llm"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "bin": {
+    "x-post-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "smoke": "node dist/index.js --smoke",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.7"
+  }
+}

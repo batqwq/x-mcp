@@ -6,6 +6,8 @@ import type { EnvLike, ProviderId } from "./types.js";
 import { normalizeApiKey, normalizeProviderId } from "./validation.js";
 
 const CLEAR_SCREEN = "\x1b[2J\x1b[H";
+const CHECK = "✓";
+const CROSS = "✗";
 
 export interface ProviderEnvironmentStatus {
   twitterapiIoConfigured: boolean;
@@ -28,27 +30,75 @@ export function getProviderEnvironmentStatus(env: EnvLike): ProviderEnvironmentS
   };
 }
 
+// ---------------------------------------------------------------------------
+// Rendering helpers
+// ---------------------------------------------------------------------------
+
+function statusIcon(configured: boolean): string {
+  return configured ? CHECK : CROSS;
+}
+
 export function renderDashboard(status: ProviderEnvironmentStatus, state: OnboardingState): string {
-  const title = state.completed ? "x-mcp TUI" : "x-mcp first-use onboarding";
-  const setupState = state.completed ? "已完成" : "未完成";
+  const twitterIcon = statusIcon(status.twitterapiIoConfigured);
+  const getxIcon = statusIcon(status.getxapiConfigured);
 
   return [
     "============================================",
-    title,
+    "  x-mcp TUI",
     "============================================",
-    `Onboarding:        ${setupState}`,
-    `TwitterAPI.io key: ${status.twitterapiIoConfigured ? "已配置" : "未配置"}`,
-    `GetXAPI key:       ${status.getxapiConfigured ? "已配置" : "未配置"}`,
-    `Default provider:  ${status.defaultProvider ?? "未设置"}`,
+    `  TwitterAPI.io  ${twitterIcon}  ${status.twitterapiIoConfigured ? "已配置" : "未配置"}`,
+    `  GetXAPI        ${getxIcon}  ${status.getxapiConfigured ? "已配置" : "未配置"}`,
+    `  默认 provider     ${status.defaultProvider ?? "自动"}`,
     "--------------------------------------------",
     "",
-    "1. 查看环境检查",
-    "2. 生成 TwitterAPI.io MCP 配置",
-    "3. 生成 GetXAPI MCP 配置",
-    "4. 查看 PowerShell 一键运行命令",
-    "5. 标记 first-use onboarding 完成",
-    "6. 设置 API Key",
-    "0. 退出",
+    "  1. 设置 API Key",
+    "  2. 生成 MCP 客户端配置",
+    "  3. 生成 PowerShell 一键命令",
+    "  4. 查看环境详情",
+    "  0. 退出",
+    ""
+  ].join("\n");
+}
+
+export function renderWelcome(): string {
+  return [
+    "============================================",
+    "  欢迎使用 x-mcp!",
+    "============================================",
+    "",
+    "  x-mcp 是一个只读的 X/Twitter MCP 服务器，",
+    "  支持 TwitterAPI.io 和 GetXAPI 两个数据源。",
+    "",
+    "  开始之前，你需要至少设置一个 API Key。",
+    "  设好后即可在 MCP 客户端中使用。",
+    "",
+    "  获取 API Key：",
+    "    TwitterAPI.io → https://twitterapi.io",
+    "    GetXAPI       → https://getxapi.com",
+    ""
+  ].join("\n");
+}
+
+export function renderSetupComplete(status: ProviderEnvironmentStatus): string {
+  const providers = [
+    status.twitterapiIoConfigured ? "TwitterAPI.io" : undefined,
+    status.getxapiConfigured ? "GetXAPI" : undefined
+  ].filter(Boolean);
+
+  return [
+    "============================================",
+    "  设置完成!",
+    "============================================",
+    "",
+    `  已配置 provider: ${providers.join(", ")}`,
+    "",
+    status.twitterapiIoConfigured && status.getxapiConfigured
+      ? "  两个 provider 均已配置，当主 provider 故障时会自动切换备用。"
+      : "  提示：配置两个 provider 可启用自动故障切换。",
+    "",
+    "  接下来你可以：",
+    "  · 在菜单中生成 MCP 客户端配置（JSON）",
+    "  · 或直接使用 npx -y github:batqwq/x-mcp --server 启动",
     ""
   ].join("\n");
 }
@@ -60,67 +110,90 @@ export function renderEnvironmentReport(status: ProviderEnvironmentStatus): stri
   ].filter(Boolean);
 
   return [
-    "环境检查",
+    "环境详情",
     "",
-    `TwitterAPI.io: ${status.twitterapiIoConfigured ? "已配置 TWITTERAPI_IO_KEY" : "未配置 TWITTERAPI_IO_KEY"}`,
-    `GetXAPI:       ${status.getxapiConfigured ? "已配置 GETXAPI_KEY" : "未配置 GETXAPI_KEY"}`,
-    `默认 provider: ${status.defaultProvider ?? "未设置"}`,
-    `可用 provider: ${configuredProviders.length > 0 ? configuredProviders.join(", ") : "无"}`,
+    `  TwitterAPI.io  ${statusIcon(status.twitterapiIoConfigured)}  ${status.twitterapiIoConfigured ? "TWITTERAPI_IO_KEY 已配置" : "TWITTERAPI_IO_KEY 未配置"}`,
+    `  GetXAPI        ${statusIcon(status.getxapiConfigured)}  ${status.getxapiConfigured ? "GETXAPI_KEY 已配置" : "GETXAPI_KEY 未配置"}`,
+    `  默认 provider     ${status.defaultProvider ?? "自动（优先 TwitterAPI.io）"}`,
+    `  可用 provider     ${configuredProviders.length > 0 ? configuredProviders.join(", ") : "无"}`,
+    `  Fallback         ${configuredProviders.length > 1 ? "已启用（瞬态故障自动切换）" : "未启用（需配置两个 provider）"}`,
     "",
     configuredProviders.length > 0
-      ? "可以在 MCP 客户端中使用本 server。"
-      : "请先设置 TWITTERAPI_IO_KEY 或 GETXAPI_KEY。"
+      ? "  状态正常，可以在 MCP 客户端中使用。"
+      : "  请先通过菜单「设置 API Key」配置至少一个 provider。"
   ].join("\n");
 }
 
-export function renderMcpClientConfig(provider: ProviderId): string {
-  const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
-  const envValue = provider === "twitterapi_io" ? "your_twitterapi_io_key" : "your_getxapi_key";
+export function renderMcpClientConfig(provider: ProviderId, env: EnvLike): string {
+  const twitterKey = normalizeApiKey(env.TWITTERAPI_IO_KEY);
+  const getxKey = normalizeApiKey(env.GETXAPI_KEY);
 
-  return JSON.stringify(
-    {
-      mcpServers: {
-        "x-post": {
-          command: "npx",
-          args: ["-y", "github:batqwq/x-mcp", "--server"],
-          env: {
-            [envKey]: envValue,
-            X_POST_PROVIDER: provider
-          }
-        }
-      }
-    },
-    null,
-    2
-  );
-}
-
-export function renderPowerShellCommands(provider: ProviderId): string {
-  if (provider === "twitterapi_io") {
-    return [
-      '$env:TWITTERAPI_IO_KEY="your_twitterapi_io_key"',
-      '$env:X_POST_PROVIDER="twitterapi_io"',
-      "npx -y github:batqwq/x-mcp --server"
-    ].join("\n");
+  const envBlock: Record<string, string> = {};
+  if (twitterKey) {
+    envBlock.TWITTERAPI_IO_KEY = twitterKey;
   }
+  if (getxKey) {
+    envBlock.GETXAPI_KEY = getxKey;
+  }
+  envBlock.X_POST_PROVIDER = provider;
 
   return [
-    '$env:GETXAPI_KEY="your_getxapi_key"',
-    '$env:X_POST_PROVIDER="getxapi"',
-    "npx -y github:batqwq/x-mcp --server"
+    "将以下 JSON 添加到你的 MCP 客户端配置文件中：",
+    "",
+    JSON.stringify(
+      {
+        mcpServers: {
+          "x-post": {
+            command: "npx",
+            args: ["-y", "github:batqwq/x-mcp", "--server"],
+            env: envBlock
+          }
+        }
+      },
+      null,
+      2
+    ),
+    "",
+    "提示：Key 已自动填入，可直接使用。"
+  ].join("\n");
+}
+
+export function renderPowerShellCommands(provider: ProviderId, env: EnvLike): string {
+  const twitterKey = normalizeApiKey(env.TWITTERAPI_IO_KEY);
+  const getxKey = normalizeApiKey(env.GETXAPI_KEY);
+
+  const lines: string[] = [];
+  if (twitterKey) {
+    lines.push(`$env:TWITTERAPI_IO_KEY="${twitterKey}"`);
+  }
+  if (getxKey) {
+    lines.push(`$env:GETXAPI_KEY="${getxKey}"`);
+  }
+  lines.push(`$env:X_POST_PROVIDER="${provider}"`);
+  lines.push("npx -y github:batqwq/x-mcp --server");
+
+  return [
+    "在 PowerShell 中运行以下命令：",
+    "",
+    ...lines,
+    "",
+    "提示：Key 已自动填入，可直接复制使用。"
   ].join("\n");
 }
 
 export function renderApiKeyPrompt(provider: ProviderId): string {
   const providerName = provider === "twitterapi_io" ? "TwitterAPI.io" : "GetXAPI";
   const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
+  const url = provider === "twitterapi_io" ? "https://twitterapi.io" : "https://getxapi.com";
 
   return [
     `设置 ${providerName} API Key`,
     "",
-    `对应环境变量: ${envKey}`,
-    `输入 API Key 后将立即生效，并保存到本地配置文件。`,
-    `下次启动 TUI 时会自动加载（环境变量优先级更高）。`,
+    `  获取地址: ${url}`,
+    `  对应环境变量: ${envKey}`,
+    "",
+    "  输入后立即生效并保存到本地。",
+    "  环境变量优先级高于保存的 Key。",
     ""
   ].join("\n");
 }
@@ -131,6 +204,10 @@ export function maskApiKey(key: string): string {
   }
   return `${key.slice(0, 4)}${"*".repeat(key.length - 8)}${key.slice(-4)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Interactive TUI
+// ---------------------------------------------------------------------------
 
 export async function runTui(options: TuiOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
@@ -149,6 +226,12 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
   loadApiKeys(state, env);
 
   try {
+    // First-use guided onboarding when no API key is configured.
+    if (!state.completed) {
+      state = await runOnboardingWizard(rl, output, env, state);
+    }
+
+    // Main menu loop.
     let running = true;
     while (running) {
       const status = getProviderEnvironmentStatus(env);
@@ -157,42 +240,20 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
 
       switch (choice) {
         case "1":
-          await pause(output, rl, renderEnvironmentReport(status));
+          state = await handleSetApiKey(rl, output, env, state);
           break;
-        case "2":
-          await pause(output, rl, renderMcpClientConfig("twitterapi_io"));
+        case "2": {
+          const provider = await askProvider(rl, env);
+          await pause(output, rl, renderMcpClientConfig(provider, env));
           break;
-        case "3":
-          await pause(output, rl, renderMcpClientConfig("getxapi"));
+        }
+        case "3": {
+          const provider = await askProvider(rl, env);
+          await pause(output, rl, renderPowerShellCommands(provider, env));
           break;
+        }
         case "4":
-          await pause(output, rl, renderPowerShellCommands(await askProvider(rl)));
-          break;
-        case "5":
-          try {
-            state = await completeOnboarding(await askProvider(rl), env);
-            await pause(output, rl, "首次使用引导已标记完成。");
-          } catch (error) {
-            await pause(output, rl, `无法写入 onboarding 状态：${error instanceof Error ? error.message : String(error)}`);
-          }
-          break;
-        case "6":
-          try {
-            const provider = await askProvider(rl);
-            output.write(`${CLEAR_SCREEN}${renderApiKeyPrompt(provider)}`);
-            const apiKey = await askQuestion(rl, "API Key: ", "");
-            const trimmedKey = apiKey.trim();
-            if (!trimmedKey) {
-              await pause(output, rl, "API Key 不能为空，未做任何修改。");
-            } else {
-              const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
-              env[envKey] = trimmedKey;
-              state = await saveApiKey(provider, trimmedKey, env);
-              await pause(output, rl, `${provider === "twitterapi_io" ? "TwitterAPI.io" : "GetXAPI"} API Key 已设置并保存。\n显示: ${maskApiKey(trimmedKey)}`);
-            }
-          } catch (error) {
-            await pause(output, rl, `无法保存 API Key：${error instanceof Error ? error.message : String(error)}`);
-          }
+          await pause(output, rl, renderEnvironmentReport(getProviderEnvironmentStatus(env)));
           break;
         case "0":
         case "q":
@@ -201,7 +262,7 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
           running = false;
           break;
         default:
-          await pause(output, rl, "未知选项，请输入 0-6。");
+          await pause(output, rl, "未知选项，请输入 0-4。");
           break;
       }
     }
@@ -210,14 +271,119 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
   }
 }
 
-async function askProvider(rl: ReturnType<typeof createInterface>): Promise<ProviderId> {
-  const answer = normalizeChoice(await askQuestion(rl, "选择 provider: 1=twitterapi_io, 2=getxapi [1]: ", "1"));
+// ---------------------------------------------------------------------------
+// Guided first-use onboarding wizard
+// ---------------------------------------------------------------------------
+
+async function runOnboardingWizard(
+  rl: ReturnType<typeof createInterface>,
+  output: Writable,
+  env: EnvLike,
+  state: OnboardingState
+): Promise<OnboardingState> {
+  // Step 1: Welcome.
+  output.write(`${CLEAR_SCREEN}${renderWelcome()}`);
+  const proceed = normalizeChoice(await askQuestion(rl, "现在设置 API Key? (Y/n): ", "y"));
+  if (proceed === "n" || proceed === "no") {
+    // User chose to skip — mark onboarding complete to avoid nagging.
+    try {
+      state = await completeOnboarding(undefined, env);
+    } catch {
+      // Ignore write failure.
+    }
+    return state;
+  }
+
+  // Step 2: Set API key(s).
+  state = await handleSetApiKey(rl, output, env, state);
+
+  // Step 3: Offer to set the other provider too.
+  const status = getProviderEnvironmentStatus(env);
+  if (status.twitterapiIoConfigured !== status.getxapiConfigured) {
+    const otherName = status.twitterapiIoConfigured ? "GetXAPI" : "TwitterAPI.io";
+    const more = normalizeChoice(await askQuestion(rl, `也设置 ${otherName} 以启用自动故障切换? (y/N): `, "n"));
+    if (more === "y" || more === "yes") {
+      const otherProvider: ProviderId = status.twitterapiIoConfigured ? "getxapi" : "twitterapi_io";
+      state = await doSetApiKey(rl, output, env, state, otherProvider);
+    }
+  }
+
+  // Step 4: Auto-complete onboarding.
+  const finalStatus = getProviderEnvironmentStatus(env);
+  const preferred = finalStatus.twitterapiIoConfigured ? "twitterapi_io" as ProviderId : "getxapi" as ProviderId;
+  try {
+    state = await completeOnboarding(finalStatus.twitterapiIoConfigured || finalStatus.getxapiConfigured ? preferred : undefined, env);
+  } catch {
+    // Ignore write failure.
+  }
+
+  // Step 5: Show completion summary.
+  if (finalStatus.twitterapiIoConfigured || finalStatus.getxapiConfigured) {
+    await pause(output, rl, renderSetupComplete(finalStatus));
+  }
+
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// Shared API Key setting flow
+// ---------------------------------------------------------------------------
+
+async function handleSetApiKey(
+  rl: ReturnType<typeof createInterface>,
+  output: Writable,
+  env: EnvLike,
+  state: OnboardingState
+): Promise<OnboardingState> {
+  const provider = await askProvider(rl, env);
+  return doSetApiKey(rl, output, env, state, provider);
+}
+
+async function doSetApiKey(
+  rl: ReturnType<typeof createInterface>,
+  output: Writable,
+  env: EnvLike,
+  state: OnboardingState,
+  provider: ProviderId
+): Promise<OnboardingState> {
+  output.write(`${CLEAR_SCREEN}${renderApiKeyPrompt(provider)}`);
+  const apiKey = await askQuestion(rl, "API Key: ", "");
+  const trimmedKey = apiKey.trim();
+  if (!trimmedKey) {
+    await pause(output, rl, "API Key 不能为空，未做任何修改。");
+    return state;
+  }
+
+  const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
+  env[envKey] = trimmedKey;
+  try {
+    state = await saveApiKey(provider, trimmedKey, env);
+    const providerName = provider === "twitterapi_io" ? "TwitterAPI.io" : "GetXAPI";
+    await pause(output, rl, `${providerName} API Key 已设置并保存。\n  显示: ${maskApiKey(trimmedKey)}`);
+  } catch (error) {
+    await pause(output, rl, `API Key 已在本次会话生效，但无法持久化保存：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
+
+async function askProvider(rl: ReturnType<typeof createInterface>, env: EnvLike): Promise<ProviderId> {
+  const status = getProviderEnvironmentStatus(env);
+  const hint1 = status.twitterapiIoConfigured ? " (已配置)" : "";
+  const hint2 = status.getxapiConfigured ? " (已配置)" : "";
+  const answer = normalizeChoice(
+    await askQuestion(rl, `选择 provider: 1=TwitterAPI.io${hint1}, 2=GetXAPI${hint2} [1]: `, "1")
+  );
   return answer === "2" || answer === "getxapi" ? "getxapi" : "twitterapi_io";
 }
 
 async function pause(output: Writable, rl: ReturnType<typeof createInterface>, content: string): Promise<void> {
   output.write(`${CLEAR_SCREEN}${content}\n\n`);
-  await askQuestion(rl, "按 Enter 返回菜单...", "");
+  await askQuestion(rl, "按 Enter 继续...", "");
 }
 
 function normalizeChoice(value: string): string {

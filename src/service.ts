@@ -13,99 +13,42 @@ export interface XPostService {
   getAccountInfo(input: { provider?: ProviderId }): Promise<unknown>;
 }
 
-export function createXPostService(
-  env: EnvLike = process.env,
-  fetchImpl: FetchLike = fetch,
-  allowedXUsers?: string[]
-): XPostService {
-  // Pre-normalize whitelist for faster comparison (already handled by CLI, but double-safe)
-  const normalizedWhitelist = allowedXUsers
-    ? allowedXUsers.map((u) => u.toLowerCase().replace(/^@/, ""))
-    : undefined;
-
+export function createXPostService(env: EnvLike = process.env, fetchImpl: FetchLike = fetch): XPostService {
   return {
     async getPost(input) {
       const id = parseTweetId(input.idOrUrl);
-      const result = await withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
+      return withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
         provider.getPost(id)
-      ) as { provider: ProviderId; tweet: unknown; raw: unknown };
-
-      // Apply target author whitelist validation
-      if (normalizedWhitelist && normalizedWhitelist.length > 0) {
-        const authorName = extractUsername(result.tweet);
-        if (authorName && !normalizedWhitelist.includes(authorName.toLowerCase())) {
-          throw new XPostMcpError(`The author @${authorName} of this tweet is not in the allowed X usernames whitelist.`);
-        }
-      }
-
-      return result;
+      );
     },
 
     async searchPosts(input) {
       const query = requireNonBlank(input.query, "query");
       const queryType = normalizeSearchProduct(input.queryType);
       const cursor = optionalNonBlank(input.cursor);
-      const result = await withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
+      return withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
         provider.searchPosts({ query, queryType, cursor })
-      ) as { provider: ProviderId; tweets: unknown[]; hasMore: boolean; nextCursor: string | null; raw: unknown };
-
-      // Filter search results dynamically
-      if (normalizedWhitelist && normalizedWhitelist.length > 0) {
-        result.tweets = result.tweets.filter((tweet) => {
-          const authorName = extractUsername(tweet);
-          return authorName ? normalizedWhitelist.includes(authorName.toLowerCase()) : false;
-        });
-      }
-
-      return result;
+      );
     },
 
     async getUserInfo(input) {
       const userName = cleanUserName(input.userName);
-      if (normalizedWhitelist && normalizedWhitelist.length > 0 && !normalizedWhitelist.includes(userName.toLowerCase())) {
-        throw new XPostMcpError(`User @${userName} is not in the allowed X usernames whitelist.`);
-      }
-
-      const result = await withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
+      return withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
         provider.getUserInfo(userName)
-      ) as { provider: ProviderId; user: unknown; raw: unknown };
-
-      // Double-check returned payload just in case of provider aliases
-      if (normalizedWhitelist && normalizedWhitelist.length > 0) {
-        const returnedName = extractUsername(result.user);
-        if (returnedName && !normalizedWhitelist.includes(returnedName.toLowerCase())) {
-          throw new XPostMcpError(`User @${returnedName} is not in the allowed X usernames whitelist.`);
-        }
-      }
-
-      return result;
+      );
     },
 
     async getUserPosts(input) {
       const userName = normalizeUserName(input.userName);
-      if (userName && normalizedWhitelist && normalizedWhitelist.length > 0 && !normalizedWhitelist.includes(userName.toLowerCase())) {
-        throw new XPostMcpError(`User @${userName} is not in the allowed X usernames whitelist.`);
-      }
-
-      if (!userName && !optionalNonBlank(input.userId)) {
+      const userId = optionalNonBlank(input.userId);
+      if (!userName && !userId) {
         throw new XPostMcpError("Pass either userName or userId.");
       }
       const includeReplies = input.includeReplies ?? false;
       const cursor = optionalNonBlank(input.cursor);
-      
-      const result = await withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
-        provider.getUserPosts({ userName, userId: input.userId, includeReplies, cursor })
-      ) as { provider: ProviderId; tweets: unknown[]; hasMore: boolean; nextCursor: string | null; raw: unknown };
-
-      // Dynamic post stream filtering
-      if (normalizedWhitelist && normalizedWhitelist.length > 0) {
-        result.tweets = result.tweets.filter((tweet) => {
-          const authorName = extractUsername(tweet);
-          return authorName ? normalizedWhitelist.includes(authorName.toLowerCase()) : false;
-        });
-      }
-
-      return result;
+      return withFallback(resolveProviderOrder(input.provider, env), env, fetchImpl, (provider) =>
+        provider.getUserPosts({ userName, userId, includeReplies, cursor })
+      );
     },
 
     async getAccountInfo(input) {
@@ -114,33 +57,6 @@ export function createXPostService(
       );
     }
   };
-}
-
-/**
- * Heuristically extracts username/screen_name from user profiles or tweet payloads.
- * Supports recursive scanning for nested structures like tweet.user or tweet.author.
- */
-export function extractUsername(obj: unknown): string | undefined {
-  if (!obj || typeof obj !== "object") {
-    return undefined;
-  }
-  const asRecord = obj as Record<string, unknown>;
-
-  // 1. Directly check username / screen_name
-  if (typeof asRecord.username === "string" && asRecord.username) return asRecord.username;
-  if (typeof asRecord.screen_name === "string" && asRecord.screen_name) return asRecord.screen_name;
-
-  // 2. Check nested user / author structures
-  if (asRecord.user && typeof asRecord.user === "object") {
-    const userResult = extractUsername(asRecord.user);
-    if (userResult) return userResult;
-  }
-  if (asRecord.author && typeof asRecord.author === "object") {
-    const authorResult = extractUsername(asRecord.author);
-    if (authorResult) return authorResult;
-  }
-
-  return undefined;
 }
 
 /**

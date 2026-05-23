@@ -163,14 +163,31 @@ async function main(): Promise<void> {
       await runMcpServer();
       return;
     case "sse": {
-      let token = config.accessToken;
-      let generated = false;
-      if (!token) {
-        const { randomBytes } = await import("node:crypto");
-        token = randomBytes(16).toString("hex");
-        generated = true;
+      // Build final allowed MCP Users map
+      const allowedUsers = { ...config.allowedMcpUsers };
+
+      // Open-source safety default: if no whitelists are defined, enforce 'admin' default protection in SSE remote mode
+      if (Object.keys(allowedUsers).length === 0 && !config.accessToken) {
+        allowedUsers["admin"] = undefined;
       }
-      await runSseServer(config.port, config.allowedHosts, undefined, token, config.allowedXUsers, generated);
+
+      const finalMcpUsers: Record<string, string> = {};
+      const { randomBytes } = await import("node:crypto");
+
+      for (const [user, token] of Object.entries(allowedUsers)) {
+        if (token) {
+          finalMcpUsers[user] = token;
+        } else {
+          finalMcpUsers[user] = randomBytes(16).toString("hex");
+        }
+      }
+
+      // Bind legacy global accessToken for backward compatibility
+      if (config.accessToken) {
+        finalMcpUsers[""] = config.accessToken;
+      }
+
+      await runSseServer(config.port, config.allowedHosts, undefined, finalMcpUsers);
       return;
     }
   }
@@ -186,11 +203,9 @@ export async function runSseServer(
   port: number,
   allowedHosts: string[] = [],
   service?: XPostService,
-  accessToken?: string,
-  allowedXUsers?: string[],
-  generated?: boolean
+  allowedMcpUsers?: Record<string, string>
 ): Promise<{ close: () => Promise<void> }> {
-  const activeTransports = new Map<string, SSEServerTransport>();
+  const activeTransports = new Map<string, { transport: SSEServerTransport; username: string }>();
 
   const httpServer = createHttpServer(async (req, res) => {
     // 安全响应头防御
@@ -236,14 +251,19 @@ export async function runSseServer(
 
     // 1. SSE 握手端点 (GET /sse)
     if (parsedUrl.pathname === "/sse" && req.method === "GET") {
-      const tokenParam = parsedUrl.searchParams.get("token");
-      if (accessToken && tokenParam !== accessToken) {
-        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
-        return;
+      const userParam = (parsedUrl.searchParams.get("user") || parsedUrl.searchParams.get("username") || "").toLowerCase().trim();
+      const tokenParam = (parsedUrl.searchParams.get("token") || "").trim();
+
+      if (allowedMcpUsers) {
+        const expectedToken = allowedMcpUsers[userParam];
+        if (!expectedToken || tokenParam !== expectedToken) {
+          res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Invalid MCP User or Token");
+          return;
+        }
       }
 
-      const messageEndpoint = accessToken
-        ? `/messages?token=${encodeURIComponent(accessToken)}`
+      const messageEndpoint = allowedMcpUsers
+        ? `/messages?user=${encodeURIComponent(userParam)}&token=${encodeURIComponent(allowedMcpUsers[userParam]!)}`
         : "/messages";
 
       const transport = new SSEServerTransport(messageEndpoint, res, {
@@ -252,24 +272,28 @@ export async function runSseServer(
       });
 
       const sessionId = transport.sessionId;
-      activeTransports.set(sessionId, transport);
+      activeTransports.set(sessionId, { transport, username: userParam });
 
       transport.onclose = () => {
         activeTransports.delete(sessionId);
       };
 
-      const actualService = service ?? createXPostService(process.env, fetch, allowedXUsers);
-      const sessionServer = createServer(actualService);
+      const sessionServer = createServer(service);
       await sessionServer.connect(transport);
       return;
     }
 
     // 2. 消息传送端点 (POST /messages)
     if (parsedUrl.pathname === "/messages" && req.method === "POST") {
-      const tokenParam = parsedUrl.searchParams.get("token");
-      if (accessToken && tokenParam !== accessToken) {
-        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
-        return;
+      const userParam = (parsedUrl.searchParams.get("user") || parsedUrl.searchParams.get("username") || "").toLowerCase().trim();
+      const tokenParam = (parsedUrl.searchParams.get("token") || "").trim();
+
+      if (allowedMcpUsers) {
+        const expectedToken = allowedMcpUsers[userParam];
+        if (!expectedToken || tokenParam !== expectedToken) {
+          res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
+          return;
+        }
       }
 
       const sessionId = parsedUrl.searchParams.get("sessionId");
@@ -278,14 +302,20 @@ export async function runSseServer(
         return;
       }
 
-      const transport = activeTransports.get(sessionId);
-      if (!transport) {
+      const sessionData = activeTransports.get(sessionId);
+      if (!sessionData) {
         res.writeHead(404, { "Content-Type": "text/plain" }).end("Session not found");
         return;
       }
 
+      // 强安全防卫：校验会话拥有者，彻底防御 session 越权跨用户调用
+      if (allowedMcpUsers && sessionData.username !== userParam) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Session owner mismatch");
+        return;
+      }
+
       try {
-        await transport.handlePostMessage(req, res);
+        await sessionData.transport.handlePostMessage(req, res);
       } catch (error) {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain" }).end("Internal Message Error");
@@ -310,20 +340,22 @@ export async function runSseServer(
       } else {
         console.log(`Warning: DNS Rebinding protection disabled. Define allowed hosts via --allowed-hosts for production.`);
       }
-      if (accessToken) {
-        console.log("Access Token authentication enabled. Secure remote access active.");
-        if (generated) {
-          console.log("\n==============================================================");
-          console.log("🔒 SECURITY NOTICE (开源安全警示):");
-          console.log("为了防止公网恶意扫描和盗刷您的 API Key 额度，系统已自动生成了安全 Access Token：");
-          console.log(`>>>  ${accessToken}  <<<`);
-          console.log("\n请在您的 Claude 远程连接器配置中，填写以下安全 URL：");
-          console.log(`👉  http://localhost:${port}/sse?token=${accessToken}`);
-          console.log("==============================================================\n");
+      
+      if (allowedMcpUsers && Object.keys(allowedMcpUsers).length > 0) {
+        console.log("\n==============================================================");
+        console.log("🔒 SECURITY NOTICE (开源安全警示 - MCP 用户白名单策略):");
+        console.log("为了防范公网盗刷付费 API 额度，系统已启动用户安全接入认证。");
+        console.log("请为不同的 MCP 用户配置以下专属连接 URL：\n");
+        for (const [user, token] of Object.entries(allowedMcpUsers)) {
+          const userStr = user ? `@${user}` : "(全局匿名模式)";
+          const queryStr = user ? `user=${user}&token=${token}` : `token=${token}`;
+          console.log(`👤 MCP 用户 ${userStr.padEnd(20)} 👉  http://localhost:${port}/sse?${queryStr}`);
         }
+        console.log("==============================================================\n");
       } else {
-        console.log("Warning: Access Token auth is disabled. Protect your server by defining --access-token in public clouds.");
+        console.log("Warning: MCP User Whitelist is disabled. Protect your server by defining --allowed-mcp-users in public clouds.");
       }
+
       resolve({
         close: () => new Promise<void>((res, rej) => {
           httpServer.close((err) => {

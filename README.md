@@ -76,16 +76,25 @@ npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.c
 
 在公网环境（如云主机或 Render、Docker）部署此开源项目时，任何人都可以通过 SSE 匿名调用您的工具有可能盗刷您配置的 TwitterAPI.io / GetXAPI 额度。为此项目内置了**访问密钥验证**：
 
-1. **设置鉴权密钥**：启动服务时传递 `--access-token` 参数或设置 `X_MCP_ACCESS_TOKEN` 环境变量：
+* **系统默认生成强随机 Token**：若启动远程 SSE 服务器时未手动设置 `--access-token` 凭据，系统会在启动时**自动随机生成一个高强度的安全 Token** 并在控制台打印对应的连接引导 URL。这保障了在任何公网匿名的部署场景下，本服务默认即是 100% 绝对安全的。
+* **自定义鉴权密钥**：启动服务时传递 `--access-token` 参数或设置 `X_MCP_ACCESS_TOKEN` 环境变量：
    ```bash
    npx -y github:batqwq/x-mcp --sse --port 3000 --access-token my-secure-token
    ```
-2. **安全客户端连接**：在 Claude 远程连接器配置弹窗的 URL 栏中，**必须**将安全 token 拼在参数中连接：
+* **安全客户端连接**：在 Claude 远程连接器配置弹窗的 URL 栏中，**必须**将安全 token 拼在参数中连接：
    ```
    https://your-x-mcp-server.com/sse?token=my-secure-token
    ```
    *建立连接后，系统会自动在随后的所有 JSON-RPC 通信 (POST /messages) 中执行会话级 Token 校验。未授权的连接均直接返回 `401 Unauthorized` 拒绝服务。*
 
+#### 🔒 目标 X 用户白名单过滤策略
+
+如果您不希望别人通过您的 MCP 节点查询任意敏感用户的 Twitter 数据，可以通过启动参数限制只允许查询特定的 Twitter 账号（如您自己的账号）：
+* **启动参数**：传递 `--allowed-x-users <usernames>`，或者配置 `ALLOWED_X_USERS` 环境变量（用户名以逗号分隔，不区分大小写，如 `@batqwq,elonmusk`）。
+* **安全过滤效能**：
+  * `getUserInfo` 与 `getUserPosts`：限制只能读取白名单内用户的信息与发帖。
+  * `getPost` (读取单帖)：若被读取推文的作者不属于白名单，直接在返回前予以 403 阻断拦截。
+  * `searchPosts` (推文搜索)：自动切片过滤搜索结果，只保留白名单作者的推文，强力防御数据越权外泄。
 
 ## 工具
 
@@ -209,15 +218,24 @@ npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.c
 * Use `http://localhost:3000/sse` in Claude's Remote Connector setup to start streaming.
 
 **Access Token Authentication (Anti-Abuse protection)**: Protect your server's API provider keys from unauthorized billing/abuse in public environments. 
-1. Start with `--access-token` option or set `X_MCP_ACCESS_TOKEN` environment variable:
+* **System-Generated Token (Secure Default)**: If `--access-token` or `X_MCP_ACCESS_TOKEN` is not defined when running in SSE mode, the server will **automatically generate a 32-character cryptographically secure token** on startup and display the connection URLs on your terminal.
+* **Custom Token**: Start with `--access-token` option or set `X_MCP_ACCESS_TOKEN` environment variable:
    ```bash
    npx -y github:batqwq/x-mcp --sse --port 3000 --access-token my-secure-token
    ```
-2. In Claude Web custom connector setup, append the token to your Server URL:
+* **Client connection**: In Claude Web custom connector setup, append the token to your Server URL:
    ```
    https://your-x-mcp-server.com/sse?token=my-secure-token
    ```
    *Any requests lacking or specifying an incorrect token are immediately blocked with `401 Unauthorized` responses.*
+
+**Allowed X Usernames Whitelist (Privacy Protection)**: Limit the accounts your MCP node can query (e.g. restrict to your own handle):
+* **Configuration**: Pass `--allowed-x-users <users>` or set `ALLOWED_X_USERS` environment variable (comma-separated, case-insensitive, e.g. `@batqwq,elonmusk`).
+* **Enforcement**:
+  * Blocks any `getUserInfo` and `getUserPosts` requests outside the whitelist.
+  * Blocks single tweet retrieval (`getPost`) at the edge if the tweet's author is not whitelisted.
+  * Silently filters `searchPosts` results to only yield tweets authored by whitelisted handles, protecting privacy.
+
 
 
 ## License

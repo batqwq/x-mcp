@@ -162,9 +162,17 @@ async function main(): Promise<void> {
     case "server":
       await runMcpServer();
       return;
-    case "sse":
-      await runSseServer(config.port, config.allowedHosts, undefined, config.accessToken);
+    case "sse": {
+      let token = config.accessToken;
+      let generated = false;
+      if (!token) {
+        const { randomBytes } = await import("node:crypto");
+        token = randomBytes(16).toString("hex");
+        generated = true;
+      }
+      await runSseServer(config.port, config.allowedHosts, undefined, token, config.allowedXUsers, generated);
       return;
+    }
   }
 }
 
@@ -174,7 +182,14 @@ async function runMcpServer(): Promise<void> {
   await server.connect(transport);
 }
 
-export async function runSseServer(port: number, allowedHosts: string[] = [], service?: XPostService, accessToken?: string): Promise<{ close: () => Promise<void> }> {
+export async function runSseServer(
+  port: number,
+  allowedHosts: string[] = [],
+  service?: XPostService,
+  accessToken?: string,
+  allowedXUsers?: string[],
+  generated?: boolean
+): Promise<{ close: () => Promise<void> }> {
   const activeTransports = new Map<string, SSEServerTransport>();
 
   const httpServer = createHttpServer(async (req, res) => {
@@ -243,7 +258,8 @@ export async function runSseServer(port: number, allowedHosts: string[] = [], se
         activeTransports.delete(sessionId);
       };
 
-      const sessionServer = createServer(service);
+      const actualService = service ?? createXPostService(process.env, fetch, allowedXUsers);
+      const sessionServer = createServer(actualService);
       await sessionServer.connect(transport);
       return;
     }
@@ -296,6 +312,15 @@ export async function runSseServer(port: number, allowedHosts: string[] = [], se
       }
       if (accessToken) {
         console.log("Access Token authentication enabled. Secure remote access active.");
+        if (generated) {
+          console.log("\n==============================================================");
+          console.log("🔒 SECURITY NOTICE (开源安全警示):");
+          console.log("为了防止公网恶意扫描和盗刷您的 API Key 额度，系统已自动生成了安全 Access Token：");
+          console.log(`>>>  ${accessToken}  <<<`);
+          console.log("\n请在您的 Claude 远程连接器配置中，填写以下安全 URL：");
+          console.log(`👉  http://localhost:${port}/sse?token=${accessToken}`);
+          console.log("==============================================================\n");
+        }
       } else {
         console.log("Warning: Access Token auth is disabled. Protect your server by defining --access-token in public clouds.");
       }

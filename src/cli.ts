@@ -12,6 +12,7 @@ export interface CliConfig {
   port: number;
   allowedHosts: string[];
   accessToken?: string;
+  allowedXUsers?: string[];
 }
 
 export function getStartupMode(args: string[], tty: TtyState): StartupMode {
@@ -81,7 +82,17 @@ export function parseCliArgs(args: string[], tty: TtyState, env: Record<string, 
     accessToken = env.X_MCP_ACCESS_TOKEN;
   }
 
-  return { mode, port, allowedHosts, accessToken };
+  // Parse --allowed-x-users
+  let allowedXUsers: string[] | undefined;
+  const usersIdx = args.indexOf("--allowed-x-users");
+  if (usersIdx !== -1 && usersIdx + 1 < args.length) {
+    const val = args[usersIdx + 1]!;
+    allowedXUsers = val.split(",").map((u) => u.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
+  } else if (env.ALLOWED_X_USERS) {
+    allowedXUsers = env.ALLOWED_X_USERS.split(",").map((u) => u.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
+  }
+
+  return { mode, port, allowedHosts, accessToken, allowedXUsers };
 }
 
 export function helpText(): string {
@@ -99,6 +110,7 @@ Options:
   --port, -p <number>                   Port for SSE server (default: 3000)
   --allowed-hosts <hosts>               Comma-separated hosts allowed to connect, for DNS rebinding protection (e.g. localhost,x-mcp.render.com)
   --access-token <token>                Access Token to authorize remote clients and protect API provider keys from unauthorized usage
+  --allowed-x-users <users>             Comma-separated X/Twitter usernames to limit queries (e.g. elonmusk,batqwq) for public deployments
 
 Environment:
   TWITTERAPI_IO_KEY                     TwitterAPI.io API key
@@ -107,5 +119,6 @@ Environment:
   PORT                                  Default port for SSE server
   ALLOWED_HOSTS                         Default allowed hosts for SSE server (comma-separated)
   X_MCP_ACCESS_TOKEN                    Access Token to secure SSE and message HTTP endpoints in public cloud deployments
+  ALLOWED_X_USERS                       Default allowed X/Twitter usernames to whitelist (comma-separated)
 `;
 }

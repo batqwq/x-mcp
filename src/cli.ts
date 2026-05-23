@@ -11,6 +11,7 @@ export interface CliConfig {
   mode: StartupMode;
   port: number;
   allowedHosts: string[];
+  accessToken?: string;
 }
 
 export function getStartupMode(args: string[], tty: TtyState): StartupMode {
@@ -71,7 +72,16 @@ export function parseCliArgs(args: string[], tty: TtyState, env: Record<string, 
     allowedHosts = env.ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean);
   }
 
-  return { mode, port, allowedHosts };
+  // Parse --access-token
+  let accessToken: string | undefined;
+  const tokenIdx = args.indexOf("--access-token");
+  if (tokenIdx !== -1 && tokenIdx + 1 < args.length) {
+    accessToken = args[tokenIdx + 1]!;
+  } else if (env.X_MCP_ACCESS_TOKEN) {
+    accessToken = env.X_MCP_ACCESS_TOKEN;
+  }
+
+  return { mode, port, allowedHosts, accessToken };
 }
 
 export function helpText(): string {
@@ -88,6 +98,7 @@ Usage:
 Options:
   --port, -p <number>                   Port for SSE server (default: 3000)
   --allowed-hosts <hosts>               Comma-separated hosts allowed to connect, for DNS rebinding protection (e.g. localhost,x-mcp.render.com)
+  --access-token <token>                Access Token to authorize remote clients and protect API provider keys from unauthorized usage
 
 Environment:
   TWITTERAPI_IO_KEY                     TwitterAPI.io API key
@@ -95,5 +106,6 @@ Environment:
   X_POST_PROVIDER                       twitterapi_io or getxapi
   PORT                                  Default port for SSE server
   ALLOWED_HOSTS                         Default allowed hosts for SSE server (comma-separated)
+  X_MCP_ACCESS_TOKEN                    Access Token to secure SSE and message HTTP endpoints in public cloud deployments
 `;
 }

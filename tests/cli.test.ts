@@ -39,6 +39,7 @@ describe("parseCliArgs", () => {
     expect(config.mode).toBe("sse");
     expect(config.port).toBe(3000);
     expect(config.allowedHosts).toEqual([]);
+    expect(config.accessToken).toBeUndefined();
   });
 
   it("parses explicit port option", () => {
@@ -68,6 +69,16 @@ describe("parseCliArgs", () => {
     const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { ALLOWED_HOSTS: "envhost1, envhost2" });
     expect(config.allowedHosts).toEqual(["envhost1", "envhost2"]);
   });
+
+  it("parses explicit access token option", () => {
+    const config = parseCliArgs(["--sse", "--access-token", "my-secret-key-111"], { stdin: true, stdout: true }, {});
+    expect(config.accessToken).toBe("my-secret-key-111");
+  });
+
+  it("falls back to X_MCP_ACCESS_TOKEN env", () => {
+    const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { X_MCP_ACCESS_TOKEN: "env-secret-222" });
+    expect(config.accessToken).toBe("env-secret-222");
+  });
 });
 
 describe("helpText", () => {
@@ -76,6 +87,7 @@ describe("helpText", () => {
     expect(helpText()).toContain("--sse");
     expect(helpText()).toContain("--port");
     expect(helpText()).toContain("--allowed-hosts");
+    expect(helpText()).toContain("--access-token");
     expect(helpText()).toContain("onboard");
   });
 });

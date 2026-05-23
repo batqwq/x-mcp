@@ -163,7 +163,7 @@ async function main(): Promise<void> {
       await runMcpServer();
       return;
     case "sse":
-      await runSseServer(config.port, config.allowedHosts);
+      await runSseServer(config.port, config.allowedHosts, undefined, config.accessToken);
       return;
   }
 }
@@ -174,8 +174,7 @@ async function runMcpServer(): Promise<void> {
   await server.connect(transport);
 }
 
-export async function runSseServer(port: number, allowedHosts: string[] = [], service?: XPostService): Promise<{ close: () => Promise<void> }> {
-  const server = createServer(service);
+export async function runSseServer(port: number, allowedHosts: string[] = [], service?: XPostService, accessToken?: string): Promise<{ close: () => Promise<void> }> {
   const activeTransports = new Map<string, SSEServerTransport>();
 
   const httpServer = createHttpServer(async (req, res) => {
@@ -222,7 +221,17 @@ export async function runSseServer(port: number, allowedHosts: string[] = [], se
 
     // 1. SSE 握手端点 (GET /sse)
     if (parsedUrl.pathname === "/sse" && req.method === "GET") {
-      const transport = new SSEServerTransport("/messages", res, {
+      const tokenParam = parsedUrl.searchParams.get("token");
+      if (accessToken && tokenParam !== accessToken) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
+        return;
+      }
+
+      const messageEndpoint = accessToken
+        ? `/messages?token=${encodeURIComponent(accessToken)}`
+        : "/messages";
+
+      const transport = new SSEServerTransport(messageEndpoint, res, {
         enableDnsRebindingProtection: allowedHosts.length > 0,
         allowedHosts: allowedHosts
       });
@@ -234,12 +243,19 @@ export async function runSseServer(port: number, allowedHosts: string[] = [], se
         activeTransports.delete(sessionId);
       };
 
-      await server.connect(transport);
+      const sessionServer = createServer(service);
+      await sessionServer.connect(transport);
       return;
     }
 
     // 2. 消息传送端点 (POST /messages)
     if (parsedUrl.pathname === "/messages" && req.method === "POST") {
+      const tokenParam = parsedUrl.searchParams.get("token");
+      if (accessToken && tokenParam !== accessToken) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
+        return;
+      }
+
       const sessionId = parsedUrl.searchParams.get("sessionId");
       if (!sessionId) {
         res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing sessionId");
@@ -277,6 +293,11 @@ export async function runSseServer(port: number, allowedHosts: string[] = [], se
         console.log(`DNS Rebinding protection enabled. Allowed hosts: ${allowedHosts.join(", ")}`);
       } else {
         console.log(`Warning: DNS Rebinding protection disabled. Define allowed hosts via --allowed-hosts for production.`);
+      }
+      if (accessToken) {
+        console.log("Access Token authentication enabled. Secure remote access active.");
+      } else {
+        console.log("Warning: Access Token auth is disabled. Protect your server by defining --access-token in public clouds.");
       }
       resolve({
         close: () => new Promise<void>((res, rej) => {

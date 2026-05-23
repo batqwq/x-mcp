@@ -72,6 +72,20 @@ npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.c
 * `--port, -p` — 端口，默认为 `3000` 或读取 `PORT` 环境变量。
 * `--allowed-hosts` — 逗号分割的允许请求主机，或配置 `ALLOWED_HOSTS` 环境变量。
 
+#### 🛡️ 远程访问控制鉴权 (开源部署防盗刷)
+
+在公网环境（如云主机或 Render、Docker）部署此开源项目时，任何人都可以通过 SSE 匿名调用您的工具有可能盗刷您配置的 TwitterAPI.io / GetXAPI 额度。为此项目内置了**访问密钥验证**：
+
+1. **设置鉴权密钥**：启动服务时传递 `--access-token` 参数或设置 `X_MCP_ACCESS_TOKEN` 环境变量：
+   ```bash
+   npx -y github:batqwq/x-mcp --sse --port 3000 --access-token my-secure-token
+   ```
+2. **安全客户端连接**：在 Claude 远程连接器配置弹窗的 URL 栏中，**必须**将安全 token 拼在参数中连接：
+   ```
+   https://your-x-mcp-server.com/sse?token=my-secure-token
+   ```
+   *建立连接后，系统会自动在随后的所有 JSON-RPC 通信 (POST /messages) 中执行会话级 Token 校验。未授权的连接均直接返回 `401 Unauthorized` 拒绝服务。*
+
 
 ## 工具
 
@@ -193,6 +207,18 @@ For production deployments, pass `--allowed-hosts` to automatically enable DNS R
 npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.com
 ```
 * Use `http://localhost:3000/sse` in Claude's Remote Connector setup to start streaming.
+
+**Access Token Authentication (Anti-Abuse protection)**: Protect your server's API provider keys from unauthorized billing/abuse in public environments. 
+1. Start with `--access-token` option or set `X_MCP_ACCESS_TOKEN` environment variable:
+   ```bash
+   npx -y github:batqwq/x-mcp --sse --port 3000 --access-token my-secure-token
+   ```
+2. In Claude Web custom connector setup, append the token to your Server URL:
+   ```
+   https://your-x-mcp-server.com/sse?token=my-secure-token
+   ```
+   *Any requests lacking or specifying an incorrect token are immediately blocked with `401 Unauthorized` responses.*
+
 
 ## License
 

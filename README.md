@@ -53,6 +53,26 @@ MCP 客户端配置示例：
 }
 ```
 
+### 远程 MCP 运行 (SSE 传输)
+
+除了本地集成的 Stdio 管道模式外，本项目还支持开启一个远程 SSE 服务器。这允许任何人在本地或云端远程连接您的 MCP 节点，并且支持多 AI 客户端多路并发连接：
+
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000
+```
+
+当部署在公网环境时，强烈建议配置允许连接的域名（Allowed Hosts）以强制启用高级的 **DNS 重绑定 (DNS Rebinding) 防御**和 **CORS 跨域安全策略**：
+
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.com
+```
+
+* `GET /sse` — SSE 长连接握手端点。在 Claude 远程连接器（Remote Connector）中填写此 URL（例如 `http://localhost:3000/sse`）。
+* `POST /messages` — 消息接收与处理端点。
+* `--port, -p` — 端口，默认为 `3000` 或读取 `PORT` 环境变量。
+* `--allowed-hosts` — 逗号分割的允许请求主机，或配置 `ALLOWED_HOSTS` 环境变量。
+
+
 ## 工具
 
 - `x_post_get`: 通过 tweet ID 或 `x.com`/`twitter.com` status URL 读取单条 Post。
@@ -163,6 +183,16 @@ Running in a terminal opens the first-use TUI. Use `--server` for MCP stdio mode
 **Provider fallback**: When both providers are configured, the server automatically tries the secondary provider on transient failures (5xx, 429, network errors). Client errors (4xx except 429) do not trigger fallback.
 
 **TUI API Key input**: Use menu option 6 in the TUI to enter API keys directly. Keys are persisted locally (base64-encoded) and restored on next TUI launch. Environment variables take precedence over saved keys.
+
+**Remote MCP server (SSE)**: Start a high-performance SSE server for remote MCP integration (e.g. into custom connectors in Claude Web or distributed AI clients):
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000
+```
+For production deployments, pass `--allowed-hosts` to automatically enable DNS Rebinding protection and strict CORS validation against unauthorized origins:
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.com
+```
+* Use `http://localhost:3000/sse` in Claude's Remote Connector setup to start streaming.
 
 ## License
 

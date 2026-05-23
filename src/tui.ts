@@ -55,9 +55,10 @@ export function renderDashboard(status: ProviderEnvironmentStatus, state: Onboar
     "",
     "  1. 设置 API Key",
     "  2. 管理 Claude 连接凭证 (OAuth Credentials)",
-    "  3. 生成 MCP 客户端配置",
-    "  4. 生成 PowerShell 一键命令",
-    "  5. 查看环境详情",
+    "  3. 一键启动后台持久化运行 (Remote SSE Daemon)",
+    "  4. 生成 MCP 客户端配置",
+    "  5. 生成 PowerShell 一键命令",
+    "  6. 查看环境详情",
     "  0. 退出",
     ""
   ].join("\n");
@@ -248,17 +249,20 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
         case "2":
           state = await handleManageOAuthCredentials(rl, output, env, state);
           break;
-        case "3": {
+        case "3":
+          state = await handleStartDaemon(rl, output, env, state);
+          break;
+        case "4": {
           const provider = await askProvider(rl, env);
           await pause(output, rl, renderMcpClientConfig(provider, env));
           break;
         }
-        case "4": {
+        case "5": {
           const provider = await askProvider(rl, env);
           await pause(output, rl, renderPowerShellCommands(provider, env));
           break;
         }
-        case "5":
+        case "6":
           await pause(output, rl, renderEnvironmentReport(getProviderEnvironmentStatus(env)));
           break;
         case "0":
@@ -268,7 +272,7 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
           running = false;
           break;
         default:
-          await pause(output, rl, "未知选项，请输入 0-5。");
+          await pause(output, rl, "未知选项，请输入 0-6。");
           break;
       }
     }
@@ -532,6 +536,123 @@ export async function handleManageOAuthCredentials(
         break;
     }
   }
+  return state;
+}
+
+export async function handleStartDaemon(
+  rl: ReturnType<typeof createInterface>,
+  output: Writable,
+  env: EnvLike,
+  state: OnboardingState
+): Promise<OnboardingState> {
+  const status = getProviderEnvironmentStatus(env);
+  if (!status.twitterapiIoConfigured && !status.getxapiConfigured) {
+    await pause(output, rl, "\x1b[31m❌  请先设置 API Key（选项 1）再启动远程服务！\x1b[39m");
+    return state;
+  }
+
+  // 1. 自动凭证保障：若无 OAuth 凭证，自动随机生成一组默认对，确保安全
+  let oauthClients = state.oauthClients ?? {};
+  if (Object.keys(oauthClients).length === 0) {
+    const { randomBytes } = await import("node:crypto");
+    const defaultClientId = `x-mcp-client-${randomBytes(6).toString("hex")}`;
+    const defaultClientSecret = `x-mcp-secret-${randomBytes(16).toString("hex")}`;
+    try {
+      state = await saveOAuthClient(defaultClientId, defaultClientSecret, env);
+      oauthClients = state.oauthClients ?? {};
+      output.write(`\n💡 检测到您当前未配置任何连接凭据，已自动为您生成一组默认凭证。\n`);
+    } catch {
+      oauthClients = { [defaultClientId]: defaultClientSecret };
+    }
+  }
+
+  // 2. 引导配置启动端口
+  output.write(`${CLEAR_SCREEN}一键启动后台持久化运行 (Remote SSE Daemon)\n============================================\n`);
+  const portInput = (await askQuestion(rl, "请输入服务监听端口 [3000]: ", "3000")).trim();
+  const port = parseInt(portInput || "3000", 10);
+  if (isNaN(port) || port <= 0 || port >= 65536) {
+    await pause(output, rl, "⚠️ 端口格式不正确，启动已取消。");
+    return state;
+  }
+
+  // 3. 引导配置原生 HTTPS 直连
+  const isHttps = normalizeChoice(await askQuestion(rl, "是否启用原生 HTTPS 加密直连? (y/N): ", "n"));
+  let sslKey = "";
+  let sslCert = "";
+  if (isHttps === "y" || isHttps === "yes") {
+    sslKey = (await askQuestion(rl, "请输入私钥文件路径 (ssl-key): ", "")).trim();
+    sslCert = (await askQuestion(rl, "请输入证书完整链路径 (ssl-cert): ", "")).trim();
+    if (!sslKey || !sslCert) {
+      await pause(output, rl, "⚠️ 证书或私钥路径不能为空，启动已取消。");
+      return state;
+    }
+  }
+
+  // 4. 调用 CLI 原生守护进程命令后台自我拉起
+  const { spawn } = await import("node:child_process");
+  const { join } = await import("node:path");
+
+  const spawnArgs = [process.argv[1]!, "--sse", "--port", String(port)];
+  if (sslKey && sslCert) {
+    spawnArgs.push("--ssl-key", sslKey, "--ssl-cert", sslCert);
+  }
+  spawnArgs.push("--daemon");
+
+  const child = spawn(process.execPath, spawnArgs, {
+    detached: true,
+    stdio: "pipe",
+    env: {
+      ...env,
+      __X_MCP_DAEMON_CHILD: "" // 允许它拉起父 spawn 流程
+    }
+  });
+
+  let outputData = "";
+  child.stdout?.on("data", (data) => {
+    outputData += data.toString();
+  });
+
+  await new Promise<void>((resolve) => {
+    child.on("close", () => resolve());
+  });
+
+  // 从子进程控制台输出中匹配 PID 
+  const pidMatch = outputData.match(/后台 PID:\s*(\d+)/) || outputData.match(/PID:\s*(\d+)/);
+  const childPid = pidMatch ? pidMatch[1] : "运行中";
+  const logFile = join(process.cwd(), "x-mcp-daemon.log");
+
+  const targetClientId = Object.keys(oauthClients)[0]!;
+  const targetClientSecret = oauthClients[targetClientId]!;
+  const credentialsBase64 = Buffer.from(`${targetClientId}:${targetClientSecret}`).toString("base64");
+
+  const protocol = sslKey && sslCert ? "https" : "http";
+  const report = [
+    "🎉  x-mcp 远程后台持久化服务已成功拉起！",
+    "============================================",
+    `  运行协议:       \x1b[32m${protocol.toUpperCase()}\x1b[39m`,
+    `  监听端口:       \x1b[32m${port}\x1b[39m`,
+    `  后台 PID:       \x1b[32m${childPid}\x1b[39m`,
+    `  物理日志文件:   \x1b[36m${logFile}\x1b[39m`,
+    "--------------------------------------------",
+    "🔒  以下为接入 Claude Connectors 所需的高级安全配置：",
+    `  Server URL:     \x1b[32m${protocol}://los.942778.online${port === 80 || port === 443 ? "" : ":" + port}/sse\x1b[39m`,
+    "  (⚠️ 请将 'los.942778.online' 替换为您在 Spaceship 配置的真实域名！)",
+    "",
+    "  [方式 A: URL 拼接极简接入 (最推荐 ⭐⭐⭐)]",
+    "  在 Claude 的 Authentication 选 No authentication，",
+    "  然后直接在 Server URL 中复制填入以下完整地址：",
+    `  \x1b[36m${protocol}://los.942778.online${port === 80 || port === 443 ? "" : ":" + port}/sse?client_id=${targetClientId}&client_secret=${targetClientSecret}\x1b[39m`,
+    "",
+    "  [方式 B: 标准 Header 接入]",
+    "  在 Claude 的 Authentication 选 API key，配置如下：",
+    "    - Header Name  填: \x1b[36mAuthorization\x1b[39m",
+    `    - Header Value 填: \x1b[36mBasic ${credentialsBase64}\x1b[39m`,
+    "============================================",
+    "提示：即使您现在退出此 TUI 或断开 SSH，该服务依然会在后台永久死守运行！",
+    `若需停止该服务，请在终端执行: \x1b[31mkill ${childPid}\x1b[39m 或在任务管理器中结束对应进程。`
+  ].join("\n");
+
+  await pause(output, rl, report);
   return state;
 }
 

@@ -166,6 +166,41 @@ async function main(): Promise<void> {
       await runMcpServer();
       return;
     case "sse": {
+      // 如果要求以守护进程方式运行，且当前不是处于子进程中，执行脱离拉起
+      if (config.daemon && process.env.__X_MCP_DAEMON_CHILD !== "true") {
+        const { spawn } = await import("node:child_process");
+        const { join } = await import("node:path");
+        const { openSync } = await import("node:fs");
+
+        // 过滤掉 --daemon 参数以防死循环拉起
+        const childArgs = process.argv.slice(2).filter((arg) => arg !== "--daemon");
+        
+        const logFile = join(process.cwd(), "x-mcp-daemon.log");
+        const out = openSync(logFile, "a");
+        const err = openSync(logFile, "a");
+
+        const child = spawn(process.execPath, [process.argv[1]!, ...childArgs], {
+          detached: true,
+          stdio: ["ignore", out, err],
+          env: {
+            ...process.env,
+            __X_MCP_DAEMON_CHILD: "true"
+          }
+        });
+
+        child.unref();
+
+        console.log("\n==============================================================");
+        console.log("🎉  x-mcp 后台守护服务已成功启动！");
+        console.log("--------------------------------------------------------------");
+        console.log(`  后台 PID:       ${child.pid}`);
+        console.log(`  运行端口:       ${config.port}`);
+        console.log(`  物理日志文件:   ${logFile}`);
+        console.log("==============================================================\n");
+
+        process.exit(0);
+      }
+
       // 从本地读取 onboarding 状态
       const state = await readOnboardingState();
       let oauthClients = state.oauthClients ?? {};

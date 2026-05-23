@@ -91,6 +91,14 @@ describe("parseCliArgs", () => {
     expect(config.sslKey).toBe("env-key.pem");
     expect(config.sslCert).toBe("env-cert.pem");
   });
+
+  it("parses daemon option", () => {
+    const config = parseCliArgs(["--sse", "--daemon"], { stdin: true, stdout: true }, {});
+    expect(config.daemon).toBe(true);
+
+    const noDaemonConfig = parseCliArgs(["--sse"], { stdin: true, stdout: true }, {});
+    expect(noDaemonConfig.daemon).toBe(false);
+  });
 });
 
 describe("helpText", () => {

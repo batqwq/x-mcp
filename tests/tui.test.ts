@@ -23,7 +23,8 @@ describe("TUI dashboard", () => {
     expect(screen).toContain("未配置");
     expect(screen).toContain("1. 设置 API Key");
     expect(screen).toContain("2. 管理 Claude 连接凭证 (OAuth Credentials)");
-    expect(screen).toContain("3. 生成 MCP 客户端配置");
+    expect(screen).toContain("3. 一键启动后台持久化运行 (Remote SSE Daemon)");
+    expect(screen).toContain("4. 生成 MCP 客户端配置");
     expect(screen).toContain("0. 退出");
   });
 

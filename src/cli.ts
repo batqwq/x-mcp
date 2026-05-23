@@ -14,6 +14,7 @@ export interface CliConfig {
   accessToken?: string;
   sslKey?: string;
   sslCert?: string;
+  daemon?: boolean;
 }
 
 export function getStartupMode(args: string[], tty: TtyState): StartupMode {
@@ -101,7 +102,10 @@ export function parseCliArgs(args: string[], tty: TtyState, env: Record<string, 
     sslCert = env.X_MCP_SSL_CERT;
   }
 
-  return { mode, port, allowedHosts, accessToken, sslKey, sslCert };
+  // Parse --daemon
+  const daemon = args.includes("--daemon");
+
+  return { mode, port, allowedHosts, accessToken, sslKey, sslCert, daemon };
 }
 
 export function helpText(): string {
@@ -121,6 +125,7 @@ Options:
   --access-token <token>                Access Token to protect the SSE server (global mode)
   --ssl-key <path>                      Path to SSL private key file (e.g. privkey.pem) for native HTTPS
   --ssl-cert <path>                     Path to SSL certificate chain file (e.g. fullchain.pem) for native HTTPS
+  --daemon                              Run the SSE server in the background as a daemon process
 
 Environment:
   TWITTERAPI_IO_KEY                     TwitterAPI.io API key

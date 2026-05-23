@@ -77,6 +77,14 @@ npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.c
 * `GET /sse` — SSE 长连接握手端点。在 Claude 远程连接器（Remote Connector）中填写此 URL（例如 `https://your-domain.com/sse`）。
 * `--ssl-key <path>` — 原生 HTTPS 服务所需的私钥文件路径（如 `privkey.pem`）。亦可通过环境变量 `X_MCP_SSL_KEY` 传递。
 * `--ssl-cert <path>` — 原生 HTTPS 服务所需的完整证书链文件路径（如 `fullchain.pem`）。亦可通过环境变量 `X_MCP_SSL_CERT` 传递。
+* `--daemon` — 指示远程 SSE 服务在后台脱离为守护进程永久运行，并将日志与错误重定向到本地 `x-mcp-daemon.log`。
+
+#### 🚀 TUI 交互式一键后台持久化启动 (零代码/零命令行极简推荐 ⭐⭐⭐)
+您不需要记忆任何繁杂的命令行或配置复杂的 Caddy 反向代理，直接在终端里拉起交互式 TUI：
+```bash
+npx -y github:batqwq/x-mcp
+```
+在 Dashboard 主菜单中选择 `3. 一键启动后台持久化运行 (Remote SSE Daemon)`，系统会交互式询问您的端口和 SSL 证书配置，全自动在后台脱离并永久死守挂起。成功后，**屏幕会直接绿字高亮输出您在 Claude 填入所需的完整 Server URL 地址（含 OAuth 鉴权及拼接好的 URL，一键复制即可）**。即使您退出 TUI 甚至直接关闭服务器 SSH 终端，服务依然在后台稳健跑！
 * `POST /messages` — 消息接收与处理端点。
 * `--port, -p` — 端口，默认为 `3000` 或读取 `PORT` 环境变量。
 * `--allowed-hosts` — 逗号分割的允许请求主机，或配置 `ALLOWED_HOSTS` 环境变量。
@@ -224,6 +232,14 @@ The server will automatically boot up TLS sockets and high-light a green `🔒 H
 * Use `https://your-domain.com/sse` in Claude's Remote Connector setup to start streaming.
 * `--ssl-key <path>` — Path to SSL private key file (e.g. `privkey.pem`) for native HTTPS mode. (Env: `X_MCP_SSL_KEY`)
 * `--ssl-cert <path>` — Path to SSL certificate chain file (e.g. `fullchain.pem`) for native HTTPS mode. (Env: `X_MCP_SSL_CERT`)
+* `--daemon` — Run the SSE server in the background as a detached daemon process. (Logs will be directed to `x-mcp-daemon.log`)
+
+#### 🚀 TUI One-Click Background Daemon Startup (Zero-Command Simplest Way)
+No need to write scripts or remember commands. Just run the interactive TUI:
+```bash
+npx -y github:batqwq/x-mcp
+```
+Select `3. 一键启动后台持久化运行 (Remote SSE Daemon)` from the main dashboard. The TUI will guide you through ports and SSL certificates setups, automatically detach the service in the background, and **highly-light green card containing all direct URLs you need for Claude custom connectors**. You can freely exit TUI or close your server SSH window—the daemon lives on stably!
 
 **Access Token Authentication & MCP User Whitelist (Anti-Abuse protection)**: Protect your server's API provider keys from unauthorized billing/abuse in public environments.
 * **Whitelist configuration**: Pass `--allowed-mcp-users <users>` or set `ALLOWED_MCP_USERS` environment variable (comma-separated, e.g. `batqwq:secret1,guest:secret2` or just `batqwq,guest` for automatic token assignment).

@@ -10,22 +10,29 @@ const mockService: XPostService = {
   getAccountInfo: vi.fn(),
 };
 
-describe("SSE Remote Server - No Auth Configuration", () => {
+describe("SSE Remote Server - OAuth Client ID & Secret Basic Auth", () => {
   let sseServer: { close: () => Promise<void> };
   const port = 4569;
   const allowedHosts = ["localhost:4569", "localhost", "localhost:3000"];
+  const oauthClients = {
+    "x-mcp-client-test": "x-mcp-secret-test"
+  };
 
   beforeAll(async () => {
-    // Under no auth, the system defaults to "admin" auto-generated token to keep it secure
-    sseServer = await runSseServer(port, allowedHosts, mockService, { admin: "secure-mcp-key" });
+    sseServer = await runSseServer(port, allowedHosts, mockService, oauthClients);
   });
 
   afterAll(async () => {
     await sseServer.close();
   });
 
-  it("handles GET /sse with correct token parameters", async () => {
-    const res = await fetch(`http://localhost:${port}/sse?user=admin&token=secure-mcp-key`);
+  it("permits GET /sse with correct Basic Authorization header", async () => {
+    const credentials = Buffer.from("x-mcp-client-test:x-mcp-secret-test").toString("base64");
+    const res = await fetch(`http://localhost:${port}/sse`, {
+      headers: {
+        "Authorization": `Basic ${credentials}`
+      }
+    });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
 
@@ -37,81 +44,79 @@ describe("SSE Remote Server - No Auth Configuration", () => {
     const { value } = await reader.read();
     const text = new TextDecoder().decode(value);
     expect(text).toContain("event: endpoint");
-    expect(text).toContain("data: /messages?user=admin&token=secure-mcp-key&sessionId=");
+    expect(text).toContain("data: /messages?client_id=x-mcp-client-test&client_secret=x-mcp-secret-test&sessionId=");
 
     await reader.cancel();
   });
 
-  it("rejects invalid tokens under default security protection", async () => {
+  it("permits GET /sse with correct URL parameters", async () => {
+    const res = await fetch(`http://localhost:${port}/sse?client_id=x-mcp-client-test&client_secret=x-mcp-secret-test`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error("No readable body");
+    }
+
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    expect(text).toContain("event: endpoint");
+    expect(text).toContain("data: /messages?client_id=x-mcp-client-test&client_secret=x-mcp-secret-test&sessionId=");
+
+    await reader.cancel();
+  });
+
+  it("rejects unauthorized clients with 401", async () => {
+    // Missing credentials
     const res1 = await fetch(`http://localhost:${port}/sse`);
     expect(res1.status).toBe(401);
 
-    const res2 = await fetch(`http://localhost:${port}/sse?user=admin&token=wrong-one`);
+    // Incorrect secret
+    const credentials = Buffer.from("x-mcp-client-test:wrong-secret").toString("base64");
+    const res2 = await fetch(`http://localhost:${port}/sse`, {
+      headers: {
+        "Authorization": `Basic ${credentials}`
+      }
+    });
     expect(res2.status).toBe(401);
+
+    // Non-existent client ID
+    const credentials2 = Buffer.from("stranger-client:x-mcp-secret-test").toString("base64");
+    const res3 = await fetch(`http://localhost:${port}/sse`, {
+      headers: {
+        "Authorization": `Basic ${credentials2}`
+      }
+    });
+    expect(res3.status).toBe(401);
   });
 });
 
-describe("SSE Remote Server - Multi-User Whitelist", () => {
+describe("SSE Remote Server - POST /messages & Session Isolation", () => {
   let sseServer: { close: () => Promise<void> };
   const port = 4570;
   const allowedHosts = ["localhost:4570", "localhost"];
-  const mcpUsersMap = {
-    batqwq: "secret-key-1",
-    guest: "secret-key-2",
+  const oauthClients = {
+    "client-a": "secret-a",
+    "client-b": "secret-b"
   };
 
   beforeAll(async () => {
-    sseServer = await runSseServer(port, allowedHosts, mockService, mcpUsersMap);
+    sseServer = await runSseServer(port, allowedHosts, mockService, oauthClients);
   });
 
   afterAll(async () => {
     await sseServer.close();
   });
 
-  it("rejects unauthorized users or tokens with 401", async () => {
-    // Missing credentials
-    const res1 = await fetch(`http://localhost:${port}/sse`);
-    expect(res1.status).toBe(401);
-
-    // Incorrect token
-    const res2 = await fetch(`http://localhost:${port}/sse?user=batqwq&token=wrong-token`);
-    expect(res2.status).toBe(401);
-
-    // Non-whitelisted user
-    const res3 = await fetch(`http://localhost:${port}/sse?user=stranger&token=secret-key-1`);
-    expect(res3.status).toBe(401);
-  });
-
-  it("permits whitelisted users with valid keys and appends them to messageEndpoint", async () => {
-    // 1. batqwq connects
-    const resUser1 = await fetch(`http://localhost:${port}/sse?user=batqwq&token=secret-key-1`);
-    expect(resUser1.status).toBe(200);
-    const reader1 = resUser1.body?.getReader();
-    if (!reader1) throw new Error("No readable body");
-
-    const { value: val1 } = await reader1.read();
-    const text1 = new TextDecoder().decode(val1);
-    expect(text1).toContain("event: endpoint");
-    expect(text1).toContain("data: /messages?user=batqwq&token=secret-key-1&sessionId=");
-
-    // 2. guest connects
-    const resUser2 = await fetch(`http://localhost:${port}/sse?user=guest&token=secret-key-2`);
-    expect(resUser2.status).toBe(200);
-    const reader2 = resUser2.body?.getReader();
-    if (!reader2) throw new Error("No readable body");
-
-    const { value: val2 } = await reader2.read();
-    const text2 = new TextDecoder().decode(val2);
-    expect(text2).toContain("event: endpoint");
-    expect(text2).toContain("data: /messages?user=guest&token=secret-key-2&sessionId=");
-
-    await reader1.cancel();
-    await reader2.cancel();
-  });
-
-  it("enforces tokens on POST /messages calls", async () => {
-    // 1. Get a valid session for guest
-    const sseRes = await fetch(`http://localhost:${port}/sse?user=guest&token=secret-key-2`);
+  it("enforces Basic Auth and Session Owner matching on POST /messages", async () => {
+    // 1. Get a valid session for client-a
+    const credentialsA = Buffer.from("client-a:secret-a").toString("base64");
+    const sseRes = await fetch(`http://localhost:${port}/sse`, {
+      headers: {
+        "Authorization": `Basic ${credentialsA}`
+      }
+    });
     const reader = sseRes.body?.getReader();
     if (!reader) throw new Error("No readable body");
 
@@ -132,15 +137,19 @@ describe("SSE Remote Server - Multi-User Whitelist", () => {
     });
     expect(postRes1.status).toBe(401);
 
-    // 3. POST with credentials of other users -> 401
-    const postRes2 = await fetch(`http://localhost:${port}/messages?user=batqwq&token=secret-key-1&sessionId=${sessionId}`, {
+    // 3. POST with credentials of client-b (cross-session hijacking) -> 401
+    const credentialsB = Buffer.from("client-b:secret-b").toString("base64");
+    const postRes2 = await fetch(`http://localhost:${port}/messages?sessionId=${sessionId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${credentialsB}`
+      },
       body: JSON.stringify({}),
     });
     expect(postRes2.status).toBe(401);
 
-    // 4. POST with correct credentials -> 202
+    // 4. POST with correct credentials (client-a) -> 202
     const msg = {
       jsonrpc: "2.0",
       method: "tools/call",
@@ -153,9 +162,12 @@ describe("SSE Remote Server - Multi-User Whitelist", () => {
       id: 1,
     };
 
-    const postRes3 = await fetch(`http://localhost:${port}/messages?user=guest&token=secret-key-2&sessionId=${sessionId}`, {
+    const postRes3 = await fetch(`http://localhost:${port}/messages?sessionId=${sessionId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${credentialsA}`
+      },
       body: JSON.stringify(msg),
     });
     expect(postRes3.status).toBe(202);

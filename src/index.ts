@@ -9,6 +9,7 @@ import { parseCliArgs, helpText } from "./cli.js";
 import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
+import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
 
 const providerSchema = z.enum(PROVIDER_IDS).describe("Provider to use. Overrides X_POST_PROVIDER when supplied.");
 const queryTypeSchema = z.enum(["Latest", "Top"]).default("Latest").describe("Search result product/order.");
@@ -163,31 +164,25 @@ async function main(): Promise<void> {
       await runMcpServer();
       return;
     case "sse": {
-      // Build final allowed MCP Users map
-      const allowedUsers = { ...config.allowedMcpUsers };
+      // 从本地读取 onboarding 状态
+      const state = await readOnboardingState();
+      let oauthClients = state.oauthClients ?? {};
 
-      // Open-source safety default: if no whitelists are defined, enforce 'admin' default protection in SSE remote mode
-      if (Object.keys(allowedUsers).length === 0 && !config.accessToken) {
-        allowedUsers["admin"] = undefined;
-      }
-
-      const finalMcpUsers: Record<string, string> = {};
-      const { randomBytes } = await import("node:crypto");
-
-      for (const [user, token] of Object.entries(allowedUsers)) {
-        if (token) {
-          finalMcpUsers[user] = token;
-        } else {
-          finalMcpUsers[user] = randomBytes(16).toString("hex");
+      // 如果完全没有任何凭据，且没有配置全局 accessToken，系统自动生成默认的 Client ID & Secret
+      if (Object.keys(oauthClients).length === 0 && !config.accessToken) {
+        const { randomBytes } = await import("node:crypto");
+        const defaultClientId = `x-mcp-client-${randomBytes(6).toString("hex")}`;
+        const defaultClientSecret = `x-mcp-secret-${randomBytes(16).toString("hex")}`;
+        try {
+          const nextState = await saveOAuthClient(defaultClientId, defaultClientSecret);
+          oauthClients = nextState.oauthClients ?? {};
+        } catch {
+          // 如果保存失败，在内存中维护
+          oauthClients = { [defaultClientId]: defaultClientSecret };
         }
       }
 
-      // Bind legacy global accessToken for backward compatibility
-      if (config.accessToken) {
-        finalMcpUsers[""] = config.accessToken;
-      }
-
-      await runSseServer(config.port, config.allowedHosts, undefined, finalMcpUsers);
+      await runSseServer(config.port, config.allowedHosts, undefined, oauthClients, config.accessToken);
       return;
     }
   }
@@ -203,9 +198,10 @@ export async function runSseServer(
   port: number,
   allowedHosts: string[] = [],
   service?: XPostService,
-  allowedMcpUsers?: Record<string, string>
+  oauthClientsParam?: Record<string, string>,
+  globalAccessToken?: string
 ): Promise<{ close: () => Promise<void> }> {
-  const activeTransports = new Map<string, { transport: SSEServerTransport; username: string }>();
+  const activeTransports = new Map<string, { transport: SSEServerTransport; clientId: string }>();
 
   const httpServer = createHttpServer(async (req, res) => {
     // 安全响应头防御
@@ -249,22 +245,65 @@ export async function runSseServer(
       return;
     }
 
-    // 1. SSE 握手端点 (GET /sse)
-    if (parsedUrl.pathname === "/sse" && req.method === "GET") {
-      const userParam = (parsedUrl.searchParams.get("user") || parsedUrl.searchParams.get("username") || "").toLowerCase().trim();
-      const tokenParam = (parsedUrl.searchParams.get("token") || "").trim();
+    // 每次请求动态读取 onboarding 状态以获取最新凭据
+    let localClients: Record<string, string> = {};
+    try {
+      const state = await readOnboardingState();
+      localClients = state.oauthClients ?? {};
+    } catch {
+      // ignore
+    }
 
-      if (allowedMcpUsers) {
-        const expectedToken = allowedMcpUsers[userParam];
-        if (!expectedToken || tokenParam !== expectedToken) {
-          res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Invalid MCP User or Token");
-          return;
+    const oauthClients = { ...oauthClientsParam, ...localClients };
+    const globalToken = globalAccessToken ?? process.env.X_MCP_ACCESS_TOKEN;
+
+    // 凭证提取助手
+    function extractCredentials(req: any, parsedUrl: URL): { clientId?: string; clientSecret?: string } {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+        try {
+          const credentials = Buffer.from(authHeader.substring(6), "base64").toString("utf8");
+          const colonIdx = credentials.indexOf(":");
+          if (colonIdx !== -1) {
+            return {
+              clientId: credentials.substring(0, colonIdx),
+              clientSecret: credentials.substring(colonIdx + 1)
+            };
+          }
+        } catch {
+          // ignore
         }
       }
+      const cid = parsedUrl.searchParams.get("client_id") || parsedUrl.searchParams.get("clientId") || undefined;
+      const secret = parsedUrl.searchParams.get("client_secret") || parsedUrl.searchParams.get("clientSecret") || undefined;
+      return { clientId: cid, clientSecret: secret };
+    }
 
-      const messageEndpoint = allowedMcpUsers
-        ? `/messages?user=${encodeURIComponent(userParam)}&token=${encodeURIComponent(allowedMcpUsers[userParam]!)}`
-        : "/messages";
+    const { clientId, clientSecret } = extractCredentials(req, parsedUrl);
+
+    // 鉴权判断逻辑
+    let isAuthorized = false;
+    if (clientId && clientSecret) {
+      if (oauthClients[clientId] === clientSecret) {
+        isAuthorized = true;
+      } else if (globalToken && clientSecret === globalToken) {
+        isAuthorized = true;
+      }
+    } else if (clientSecret && !clientId) {
+      if (globalToken && clientSecret === globalToken) {
+        isAuthorized = true;
+      }
+    }
+
+    // 1. SSE 握手端点 (GET /sse)
+    if (parsedUrl.pathname === "/sse" && req.method === "GET") {
+      if (!isAuthorized) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Invalid OAuth Client ID or Client Secret");
+        return;
+      }
+
+      // 将授权凭证注入到 messageEndpoint 保证 POST 时也能防伪校验
+      const messageEndpoint = `/messages?client_id=${encodeURIComponent(clientId ?? "")}&client_secret=${encodeURIComponent(clientSecret ?? "")}`;
 
       const transport = new SSEServerTransport(messageEndpoint, res, {
         enableDnsRebindingProtection: allowedHosts.length > 0,
@@ -272,7 +311,8 @@ export async function runSseServer(
       });
 
       const sessionId = transport.sessionId;
-      activeTransports.set(sessionId, { transport, username: userParam });
+      // 强Session隔离：记录本 Session 的拥有者 Client ID
+      activeTransports.set(sessionId, { transport, clientId: clientId ?? "" });
 
       transport.onclose = () => {
         activeTransports.delete(sessionId);
@@ -285,15 +325,9 @@ export async function runSseServer(
 
     // 2. 消息传送端点 (POST /messages)
     if (parsedUrl.pathname === "/messages" && req.method === "POST") {
-      const userParam = (parsedUrl.searchParams.get("user") || parsedUrl.searchParams.get("username") || "").toLowerCase().trim();
-      const tokenParam = (parsedUrl.searchParams.get("token") || "").trim();
-
-      if (allowedMcpUsers) {
-        const expectedToken = allowedMcpUsers[userParam];
-        if (!expectedToken || tokenParam !== expectedToken) {
-          res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
-          return;
-        }
+      if (!isAuthorized) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
+        return;
       }
 
       const sessionId = parsedUrl.searchParams.get("sessionId");
@@ -308,8 +342,8 @@ export async function runSseServer(
         return;
       }
 
-      // 强安全防卫：校验会话拥有者，彻底防御 session 越权跨用户调用
-      if (allowedMcpUsers && sessionData.username !== userParam) {
+      // 强安全防卫：校验会话拥有者，彻底防御 session 越权跨客户端调用
+      if (sessionData.clientId !== (clientId ?? "")) {
         res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Session owner mismatch");
         return;
       }
@@ -324,7 +358,7 @@ export async function runSseServer(
       return;
     }
 
-    // 3. 兜底 404 (防扫描及路径探测)
+    // 3. 兜底 404
     res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
   });
 
@@ -333,27 +367,41 @@ export async function runSseServer(
       reject(err);
     });
 
-    httpServer.listen(port, () => {
+    httpServer.listen(port, async () => {
       console.log(`x-post-mcp-server SSE server listening on port ${port}`);
       if (allowedHosts.length > 0) {
         console.log(`DNS Rebinding protection enabled. Allowed hosts: ${allowedHosts.join(", ")}`);
       } else {
         console.log(`Warning: DNS Rebinding protection disabled. Define allowed hosts via --allowed-hosts for production.`);
       }
-      
-      if (allowedMcpUsers && Object.keys(allowedMcpUsers).length > 0) {
+
+      // 重新加载并渲染当前有效的客户端连接凭证
+      let localClients: Record<string, string> = {};
+      try {
+        const state = await readOnboardingState();
+        localClients = state.oauthClients ?? {};
+      } catch {
+        // ignore
+      }
+      const displayClients = { ...oauthClientsParam, ...localClients };
+      if (Object.keys(displayClients).length > 0) {
         console.log("\n==============================================================");
-        console.log("🔒 SECURITY NOTICE (开源安全警示 - MCP 用户白名单策略):");
-        console.log("为了防范公网盗刷付费 API 额度，系统已启动用户安全接入认证。");
-        console.log("请为不同的 MCP 用户配置以下专属连接 URL：\n");
-        for (const [user, token] of Object.entries(allowedMcpUsers)) {
-          const userStr = user ? `@${user}` : "(全局匿名模式)";
-          const queryStr = user ? `user=${user}&token=${token}` : `token=${token}`;
-          console.log(`👤 MCP 用户 ${userStr.padEnd(20)} 👉  http://localhost:${port}/sse?${queryStr}`);
+        console.log("🔒 SECURITY NOTICE (开源安全警示 - Claude 远程连接凭证):");
+        console.log("为了防范公网盗刷付费 API 额度，系统已启动 OAuth 凭证安全强鉴权机制。");
+        console.log("请在 Claude 客户端自定义连接器 (Custom Connectors -> Add Connector) 的");
+        console.log("Advanced settings (高级设置) 中配置远程 MCP，并填入以下对应信息：");
+        console.log("--------------------------------------------------------------");
+        console.log(`  Remote MCP URL:  http://localhost:${port}/sse`);
+        
+        let idx = 1;
+        for (const [cid, secret] of Object.entries(displayClients)) {
+          console.log(`\n  [凭证对 #${idx++}]`);
+          console.log(`  Client ID:       ${cid}`);
+          console.log(`  Client Secret:   ${secret}`);
         }
         console.log("==============================================================\n");
       } else {
-        console.log("Warning: MCP User Whitelist is disabled. Protect your server by defining --allowed-mcp-users in public clouds.");
+        console.log("\nWarning: No OAuth Clients or global access token configured. Remote endpoints are open to public.");
       }
 
       resolve({

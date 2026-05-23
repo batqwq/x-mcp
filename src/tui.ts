@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import type { Readable, Writable } from "node:stream";
-import { completeOnboarding, loadApiKeys, readOnboardingState, saveApiKey, touchOnboarding, type OnboardingState } from "./onboarding.js";
+import { completeOnboarding, loadApiKeys, readOnboardingState, saveApiKey, touchOnboarding, saveOAuthClient, deleteOAuthClient, type OnboardingState } from "./onboarding.js";
 import type { EnvLike, ProviderId } from "./types.js";
 import { normalizeApiKey, normalizeProviderId } from "./validation.js";
 
@@ -41,6 +41,7 @@ function statusIcon(configured: boolean): string {
 export function renderDashboard(status: ProviderEnvironmentStatus, state: OnboardingState): string {
   const twitterIcon = statusIcon(status.twitterapiIoConfigured);
   const getxIcon = statusIcon(status.getxapiConfigured);
+  const oauthCount = Object.keys(state.oauthClients ?? {}).length;
 
   return [
     "============================================",
@@ -49,12 +50,14 @@ export function renderDashboard(status: ProviderEnvironmentStatus, state: Onboar
     `  TwitterAPI.io  ${twitterIcon}  ${status.twitterapiIoConfigured ? "已配置" : "未配置"}`,
     `  GetXAPI        ${getxIcon}  ${status.getxapiConfigured ? "已配置" : "未配置"}`,
     `  默认 provider     ${status.defaultProvider ?? "自动"}`,
+    `  已配置凭证对       ${oauthCount} 组`,
     "--------------------------------------------",
     "",
     "  1. 设置 API Key",
-    "  2. 生成 MCP 客户端配置",
-    "  3. 生成 PowerShell 一键命令",
-    "  4. 查看环境详情",
+    "  2. 管理 Claude 连接凭证 (OAuth Credentials)",
+    "  3. 生成 MCP 客户端配置",
+    "  4. 生成 PowerShell 一键命令",
+    "  5. 查看环境详情",
     "  0. 退出",
     ""
   ].join("\n");
@@ -242,17 +245,20 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
         case "1":
           state = await handleSetApiKey(rl, output, env, state);
           break;
-        case "2": {
+        case "2":
+          state = await handleManageOAuthCredentials(rl, output, env, state);
+          break;
+        case "3": {
           const provider = await askProvider(rl, env);
           await pause(output, rl, renderMcpClientConfig(provider, env));
           break;
         }
-        case "3": {
+        case "4": {
           const provider = await askProvider(rl, env);
           await pause(output, rl, renderPowerShellCommands(provider, env));
           break;
         }
-        case "4":
+        case "5":
           await pause(output, rl, renderEnvironmentReport(getProviderEnvironmentStatus(env)));
           break;
         case "0":
@@ -262,7 +268,7 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
           running = false;
           break;
         default:
-          await pause(output, rl, "未知选项，请输入 0-4。");
+          await pause(output, rl, "未知选项，请输入 0-5。");
           break;
       }
     }
@@ -315,6 +321,28 @@ async function runOnboardingWizard(
     state = await completeOnboarding(finalStatus.twitterapiIoConfigured || finalStatus.getxapiConfigured ? preferred : undefined, env);
   } catch {
     // Ignore write failure.
+  }
+
+  // Step 4.5: Offer to generate Claude connection credentials.
+  const genOAuth = normalizeChoice(await askQuestion(rl, "\n是否现在生成 Claude 远程连接凭证 (Client ID & Secret)? (Y/n): ", "y"));
+  if (genOAuth === "y" || genOAuth === "yes") {
+    const { randomBytes } = await import("node:crypto");
+    const clientId = `x-mcp-client-${randomBytes(6).toString("hex")}`;
+    const clientSecret = `x-mcp-secret-${randomBytes(16).toString("hex")}`;
+    try {
+      state = await saveOAuthClient(clientId, clientSecret, env);
+      const report = [
+        "🎉 自动生成 Claude 远程连接凭证成功！",
+        "============================================",
+        `  Client ID:     \x1b[32m${clientId}\x1b[39m`,
+        `  Client Secret: \x1b[32m${clientSecret}\x1b[39m`,
+        "============================================",
+        "⚠️  请复制保存，并在 Claude Connectors 高级设置中填入它们！"
+      ].join("\n");
+      await pause(output, rl, report);
+    } catch {
+      // Ignore write failure
+    }
   }
 
   // Step 5: Show completion summary.
@@ -400,3 +428,110 @@ async function askQuestion(rl: ReturnType<typeof createInterface>, question: str
     throw error;
   }
 }
+
+export async function handleManageOAuthCredentials(
+  rl: ReturnType<typeof createInterface>,
+  output: Writable,
+  env: EnvLike,
+  state: OnboardingState
+): Promise<OnboardingState> {
+  let subRunning = true;
+  while (subRunning) {
+    const oauthClients = state.oauthClients ?? {};
+    const count = Object.keys(oauthClients).length;
+
+    const menu = [
+      "============================================",
+      "  管理 Claude 连接凭证 (OAuth Credentials)",
+      "============================================",
+      `  当前已保存凭证: ${count} 组`,
+      "--------------------------------------------",
+      "",
+      "  1. 生成新的随机凭证 (Client ID & Secret)",
+      "  2. 查看所有已保存凭证",
+      "  3. 删除指定凭证",
+      "  0. 返回主菜单",
+      ""
+    ].join("\n");
+
+    output.write(`${CLEAR_SCREEN}${menu}`);
+    const choice = normalizeChoice(await askQuestion(rl, "选择 / Choose: ", "0"));
+
+    switch (choice) {
+      case "1": {
+        const { randomBytes } = await import("node:crypto");
+        const clientId = `x-mcp-client-${randomBytes(6).toString("hex")}`;
+        const clientSecret = `x-mcp-secret-${randomBytes(16).toString("hex")}`;
+        state = await saveOAuthClient(clientId, clientSecret, env);
+        
+        const report = [
+          "🎉 成功生成新的 Claude 远程连接凭证！",
+          "============================================",
+          `  Client ID:     \x1b[32m${clientId}\x1b[39m`,
+          `  Client Secret: \x1b[32m${clientSecret}\x1b[39m`,
+          "============================================",
+          "⚠️  请妥善保存此 Client Secret！它只会完整显示一次。",
+          "当您在 Claude Connectors 的 Advanced settings 配置远程 MCP 时，",
+          "请分别填入上述 Client ID 和 Client Secret。",
+          "服务器通过 HTTP Authorization Header (Basic 认证) 强安全保障本接口的安全。"
+        ].join("\n");
+        await pause(output, rl, report);
+        break;
+      }
+      case "2": {
+        if (count === 0) {
+          await pause(output, rl, "当前没有任何已保存的凭证。");
+          break;
+        }
+        const lines = [
+          "已保存的连接凭证列表",
+          "============================================",
+          "格式：Client ID -> Client Secret (已脱敏保护)",
+          "--------------------------------------------"
+        ];
+        for (const [cid, secret] of Object.entries(oauthClients)) {
+          const maskedSecret = secret.length > 15 
+            ? `${secret.slice(0, 13)}...${secret.slice(-4)}` 
+            : "******";
+          lines.push(`🔑 ID: \x1b[36m${cid}\x1b[39m\n   Secret: ${maskedSecret}\n`);
+        }
+        await pause(output, rl, lines.join("\n"));
+        break;
+      }
+      case "3": {
+        if (count === 0) {
+          await pause(output, rl, "当前没有任何已保存的凭证可供删除。");
+          break;
+        }
+        output.write(`${CLEAR_SCREEN}删除指定凭证\n============================================\n`);
+        const targetId = (await askQuestion(rl, "请输入要删除的 Client ID: ", "")).trim();
+        if (!targetId) {
+          await pause(output, rl, "Client ID 不能为空，未做任何修改。");
+          break;
+        }
+        if (!oauthClients[targetId]) {
+          await pause(output, rl, `找不到指定的 Client ID: "${targetId}"`);
+          break;
+        }
+        const confirm = normalizeChoice(await askQuestion(rl, `确认要删除 ${targetId} 吗? (y/N): `, "n"));
+        if (confirm === "y" || confirm === "yes") {
+          state = await deleteOAuthClient(targetId, env);
+          await pause(output, rl, `✅ 凭证 ${targetId} 已成功删除。`);
+        } else {
+          await pause(output, rl, "已取消删除。");
+        }
+        break;
+      }
+      case "0":
+      case "q":
+      case "back":
+        subRunning = false;
+        break;
+      default:
+        await pause(output, rl, "未知选项，请输入 0-3。");
+        break;
+    }
+  }
+  return state;
+}
+

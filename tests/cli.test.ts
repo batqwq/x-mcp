@@ -40,7 +40,6 @@ describe("parseCliArgs", () => {
     expect(config.port).toBe(3000);
     expect(config.allowedHosts).toEqual([]);
     expect(config.accessToken).toBeUndefined();
-    expect(config.allowedMcpUsers).toBeUndefined();
   });
 
   it("parses explicit port option", () => {
@@ -80,23 +79,6 @@ describe("parseCliArgs", () => {
     const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { X_MCP_ACCESS_TOKEN: "env-secret-222" });
     expect(config.accessToken).toBe("env-secret-222");
   });
-
-  it("parses allowed mcp users list with custom credentials", () => {
-    const config = parseCliArgs(["--sse", "--allowed-mcp-users", "batqwq:secret1, guest : secret2, admin"], { stdin: true, stdout: true }, {});
-    expect(config.allowedMcpUsers).toEqual({
-      batqwq: "secret1",
-      guest: "secret2",
-      admin: undefined,
-    });
-  });
-
-  it("falls back to ALLOWED_MCP_USERS env", () => {
-    const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { ALLOWED_MCP_USERS: "userA:tokenA, userB" });
-    expect(config.allowedMcpUsers).toEqual({
-      usera: "tokenA",
-      userb: undefined,
-    });
-  });
 });
 
 describe("helpText", () => {
@@ -106,7 +88,6 @@ describe("helpText", () => {
     expect(helpText()).toContain("--port");
     expect(helpText()).toContain("--allowed-hosts");
     expect(helpText()).toContain("--access-token");
-    expect(helpText()).toContain("--allowed-mcp-users");
     expect(helpText()).toContain("onboard");
   });
 });

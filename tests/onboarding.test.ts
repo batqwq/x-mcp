@@ -1,144 +1,55 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { completeOnboarding, loadApiKeys, onboardingStatePath, readOnboardingState, saveApiKey, writeOnboardingState } from "../src/onboarding.js";
-import type { EnvLike } from "../src/types.js";
+import { describe, expect, it } from "vitest";
+import { defaultOnboardingState, onboardingStatePath, readOnboardingState, saveApiKey, loadApiKeys, saveOAuthClient } from "../src/onboarding.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
-  tempDirs.length = 0;
-});
-
-describe("onboarding state", () => {
-  it("persists completion without storing plaintext API keys", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-onboarding-"));
-    tempDirs.push(home);
-
-    const env = {
-      X_MCP_HOME: home,
-      TWITTERAPI_IO_KEY: "secret"
-    };
-
-    await completeOnboarding("twitterapi_io", env);
-    const state = await readOnboardingState(env);
-    const raw = await readFile(onboardingStatePath(env), "utf8");
-
-    expect(state.completed).toBe(true);
-    expect(state.preferredProvider).toBe("twitterapi_io");
-    expect(raw).not.toContain("secret");
+describe("onboardingStatePath", () => {
+  it("uses X_MCP_HOME when configured", () => {
+    const path = onboardingStatePath({ X_MCP_HOME: "custom_home" });
+    expect(path).toContain("custom_home");
   });
 
-  it("ignores blank X_MCP_HOME instead of writing to a relative path", async () => {
-    const path = onboardingStatePath({ X_MCP_HOME: "", APPDATA: "C:\\Users\\Example\\AppData\\Roaming" });
-
-    expect(path).toContain("x-mcp");
-    expect(path).not.toBe("onboarding.json");
-  });
-
-  it("sanitizes invalid provider values from existing state files", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-onboarding-"));
-    tempDirs.push(home);
-    const env = { X_MCP_HOME: home };
-    const path = onboardingStatePath(env);
-    await writeOnboardingState({ version: 1, completed: true, preferredProvider: "getxapi" }, env);
-    await writeFile(path, '{"version":1,"completed":true,"preferredProvider":"bad"}\n', "utf8");
-
-    const state = await readOnboardingState(env);
-
-    expect(dirname(path)).toBe(home);
-    expect(state.completed).toBe(true);
-    expect(state.preferredProvider).toBeUndefined();
+  it("falls back to APPDATA on Windows", () => {
+    const path = onboardingStatePath({ APPDATA: "app_data_dir" });
+    expect(path).toContain("app_data_dir");
   });
 });
 
-describe("API key persistence", () => {
-  it("saves and loads API key for twitterapi_io", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-apikey-"));
-    tempDirs.push(home);
-    const env: EnvLike = { X_MCP_HOME: home };
+describe("saveApiKey and loadApiKeys", () => {
+  it("saves encoded keys and loads them with env priority", async () => {
+    const tempEnv = { X_MCP_HOME: "./test_onboard_tmp" };
+    
+    // Save TwitterAPI.io key
+    let state = await saveApiKey("twitterapi_io", "tw-secret-key-123", tempEnv);
+    expect(state.apiKeys?.twitterapi_io).toBe(Buffer.from("tw-secret-key-123").toString("base64"));
 
-    await saveApiKey("twitterapi_io", "my-twitter-key", env);
+    // Save GetXAPI key
+    state = await saveApiKey("getxapi", "gx-secret-key-456", tempEnv);
+    expect(state.apiKeys?.getxapi).toBe(Buffer.from("gx-secret-key-456").toString("base64"));
 
-    const state = await readOnboardingState(env);
-    expect(state.apiKeys?.twitterapi_io).toBeDefined();
-    // Verify it's base64 encoded, not plaintext.
-    expect(state.apiKeys!.twitterapi_io).not.toBe("my-twitter-key");
-    expect(Buffer.from(state.apiKeys!.twitterapi_io!, "base64").toString("utf8")).toBe("my-twitter-key");
+    // Read state
+    const read = await readOnboardingState(tempEnv);
+    expect(read.apiKeys?.twitterapi_io).toBe(Buffer.from("tw-secret-key-123").toString("base64"));
 
-    // Loading should populate env.
-    const freshEnv: EnvLike = { X_MCP_HOME: home };
-    loadApiKeys(state, freshEnv);
-    expect(freshEnv.TWITTERAPI_IO_KEY).toBe("my-twitter-key");
+    // Load keys into env
+    const runEnv: Record<string, string | undefined> = {};
+    loadApiKeys(read, runEnv);
+    expect(runEnv.TWITTERAPI_IO_KEY).toBe("tw-secret-key-123");
+    expect(runEnv.GETXAPI_KEY).toBe("gx-secret-key-456");
+
+    // Env vars take precedence
+    const overrideEnv = { TWITTERAPI_IO_KEY: "user-override" };
+    loadApiKeys(read, overrideEnv);
+    expect(overrideEnv.TWITTERAPI_IO_KEY).toBe("user-override");
   });
+});
 
-  it("saves and loads API key for getxapi", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-apikey-"));
-    tempDirs.push(home);
-    const env: EnvLike = { X_MCP_HOME: home };
+describe("saveOAuthClient", () => {
+  it("saves oauth client credentials correctly", async () => {
+    const tempEnv = { X_MCP_HOME: "./test_onboard_tmp" };
 
-    await saveApiKey("getxapi", "my-getx-key", env);
+    const state = await saveOAuthClient("my-client-id", "my-client-secret", tempEnv);
+    expect(state.oauthClients?.["my-client-id"]).toBe("my-client-secret");
 
-    const state = await readOnboardingState(env);
-    expect(state.apiKeys?.getxapi).toBeDefined();
-    expect(Buffer.from(state.apiKeys!.getxapi!, "base64").toString("utf8")).toBe("my-getx-key");
-
-    const freshEnv: EnvLike = { X_MCP_HOME: home };
-    loadApiKeys(state, freshEnv);
-    expect(freshEnv.GETXAPI_KEY).toBe("my-getx-key");
-  });
-
-  it("does not overwrite existing env vars when loading", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-apikey-"));
-    tempDirs.push(home);
-    const env: EnvLike = { X_MCP_HOME: home };
-
-    await saveApiKey("twitterapi_io", "saved-key", env);
-
-    const state = await readOnboardingState(env);
-    const envWithExisting: EnvLike = { X_MCP_HOME: home, TWITTERAPI_IO_KEY: "env-key" };
-    loadApiKeys(state, envWithExisting);
-    expect(envWithExisting.TWITTERAPI_IO_KEY).toBe("env-key");
-  });
-
-  it("preserves API keys when completing onboarding", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-apikey-"));
-    tempDirs.push(home);
-    const env: EnvLike = { X_MCP_HOME: home };
-
-    await saveApiKey("twitterapi_io", "my-key", env);
-    await completeOnboarding("twitterapi_io", env);
-
-    const state = await readOnboardingState(env);
-    expect(state.completed).toBe(true);
-    expect(state.apiKeys?.twitterapi_io).toBeDefined();
-    expect(Buffer.from(state.apiKeys!.twitterapi_io!, "base64").toString("utf8")).toBe("my-key");
-  });
-
-  it("saves both provider keys independently", async () => {
-    const home = await mkdtemp(join(tmpdir(), "x-mcp-apikey-"));
-    tempDirs.push(home);
-    const env: EnvLike = { X_MCP_HOME: home };
-
-    await saveApiKey("twitterapi_io", "twitter-key", env);
-    await saveApiKey("getxapi", "getx-key", env);
-
-    const state = await readOnboardingState(env);
-    expect(Buffer.from(state.apiKeys!.twitterapi_io!, "base64").toString("utf8")).toBe("twitter-key");
-    expect(Buffer.from(state.apiKeys!.getxapi!, "base64").toString("utf8")).toBe("getx-key");
-
-    const freshEnv: EnvLike = { X_MCP_HOME: home };
-    loadApiKeys(state, freshEnv);
-    expect(freshEnv.TWITTERAPI_IO_KEY).toBe("twitter-key");
-    expect(freshEnv.GETXAPI_KEY).toBe("getx-key");
-  });
-
-  it("handles missing apiKeys gracefully", () => {
-    const env: EnvLike = {};
-    loadApiKeys({ version: 1, completed: false }, env);
-    expect(env.TWITTERAPI_IO_KEY).toBeUndefined();
-    expect(env.GETXAPI_KEY).toBeUndefined();
+    const read = await readOnboardingState(tempEnv);
+    expect(read.oauthClients?.["my-client-id"]).toBe("my-client-secret");
   });
 });

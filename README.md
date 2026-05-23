@@ -72,32 +72,18 @@ npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.c
 * `--port, -p` — 端口，默认为 `3000` 或读取 `PORT` 环境变量。
 * `--allowed-hosts` — 逗号分割的允许请求主机，或配置 `ALLOWED_HOSTS` 环境变量。
 
-#### 🛡️ 远程访问控制鉴权 (开源部署防盗刷)
+#### 🛡️ 远程访问控制鉴权 (OAuth Client ID & Secret 开源部署防盗刷)
 
-在公网环境（如云主机或 Render、Docker）部署此开源项目时，任何人都可以通过 SSE 匿名调用您的工具有可能盗刷您配置的 TwitterAPI.io / GetXAPI 额度。为此项目内置了**访问密钥验证**：
+在公网环境（如云主机或 Render、Docker）部署此开源项目时，任何人都可以通过 SSE 匿名调用您的工具有可能盗刷您配置的 TwitterAPI.io / GetXAPI 额度。为此项目内置了标准的 **OAuth Client ID & OAuth Client Secret 安全凭证体系**：
 
-* **系统默认生成强随机 Token**：若启动远程 SSE 服务器时未手动设置 `--access-token` 凭据，系统会在启动时**自动随机生成一个高强度的安全 Token** 并在控制台打印对应的连接引导 URL。这保障了在任何公网匿名的部署场景下，本服务默认即是 100% 绝对安全的。
-* **自定义鉴权密钥**：启动服务时传递 `--access-token` 参数或设置 `X_MCP_ACCESS_TOKEN` 环境变量：
-   ```bash
-   npx -y github:batqwq/x-mcp --sse --port 3000 --access-token my-secure-token
+* **系统自动生成凭证 (默认强保护)**：若启动远程 SSE 服务器时本地未保存任何 OAuth 凭据且未设置全局 `--access-token`，服务器会**自动随机生成一个高强度的 Client ID 和 Client Secret**，并持久化到本地 `onboarding.json` 中。这保障了在任何公网匿名的部署场景下，服务默认即是 100% 绝对安全的。
+* **TUI 极简管理凭证**：您可以在 TUI 交互界面选择 `2. 管理 Claude 连接凭证 (OAuth Credentials)` 来生成新凭证、查看已有凭证（已自动做安全脱敏保护）或删除作废凭据。
+* **Claude Connectors 标准安全配置**：当您在 Claude 客户端自定义连接器 (Custom Connectors -> Add Connector) 的 **Advanced settings (高级设置)** 中配置远程 MCP 时，请分别填入生成的 **Client ID** 和 **Client Secret**。
+* **支持 Basic 强校验与 Session 隔离**：服务端在 GET `/sse` 握手和 POST `/messages` 中会双端执行基于 HTTP `Authorization: Basic` 的强安全凭证比对。同时，服务端自动隔离多 Session 会话，并在会话中强绑定 Client ID，彻底防御越权会话劫持（Session Hijacking）。
+* **降级 URL 认证支持**：如果客户端限制导致 Header 无法传输，亦可在连接 URL 栏中以查询参数传入凭证进行握手连接：
    ```
-* **安全客户端连接**：在 Claude 远程连接器配置弹窗的 URL 栏中，**必须**将安全 token 拼在参数中连接：
+   https://your-x-mcp-server.com/sse?client_id=your_client_id&client_secret=your_client_secret
    ```
-   https://your-x-mcp-server.com/sse?token=my-secure-token
-   ```
-   *建立连接后，系统会自动在随后的所有 JSON-RPC 通信 (POST /messages) 中执行会话级 Token 校验。未授权的连接均直接返回 `401 Unauthorized` 拒绝服务。*
-
-#### 🛡️ 远程访问控制鉴权与 MCP 用户级白名单 (开源部署防盗刷)
-
-在公网环境（如云主机或 Render、Docker）部署此开源项目时，任何人都可以通过 SSE 匿名调用您的工具有可能盗刷您配置的 TwitterAPI.io / GetXAPI 额度。为此项目内置了**多会话 MCP 用户鉴权白名单**：
-
-* **白名单启动参数**：传递 `--allowed-mcp-users <users>`，或者配置 `ALLOWED_MCP_USERS` 环境变量（用户名:Token 以逗号分隔，如 `batqwq:secret1,guest:secret2`）。
-* **Token 系统自动发牌 (默认强保护)**：如果只指定用户名而不指定 Token（如 `batqwq,guest`），或者完全未传递任何鉴权参数（默认创建 `admin` 账户），**系统会在启动时自动随机为获权用户生成 32 位的高强度安全 Token** 并在控制台打印出专属的安全连接 URL。这保障了在任何公网匿名的部署场景下，本服务默认即是 100% 绝对安全的。
-* **安全客户端连接**：在 Claude 远程连接器配置弹窗的 URL 栏中，**必须**带上对应的 user 和 token 凭证连接：
-   ```
-   https://your-x-mcp-server.com/sse?user=batqwq&token=secret1
-   ```
-   *建立连接后，服务端执行强防卫校验，将 session 会话与获权用户进行强绑定校验。未授权的连接、错误 Token 或跨会话劫持 (Session Hijacking) 均直接返回 `401 Unauthorized` 拒绝服务，保障付费 API 额度绝对安全。*
 
 
 ## 工具
@@ -209,7 +195,7 @@ Running in a terminal opens the first-use TUI. Use `--server` for MCP stdio mode
 
 **Provider fallback**: When both providers are configured, the server automatically tries the secondary provider on transient failures (5xx, 429, network errors). Client errors (4xx except 429) do not trigger fallback.
 
-**TUI API Key input**: Use menu option 6 in the TUI to enter API keys directly. Keys are persisted locally (base64-encoded) and restored on next TUI launch. Environment variables take precedence over saved keys.
+**TUI API Key input**: Use menu option 1 in the TUI to enter API keys directly. Keys are persisted locally (base64-encoded) and restored on next TUI launch. Environment variables take precedence over saved keys.
 
 **Remote MCP server (SSE)**: Start a high-performance SSE server for remote MCP integration (e.g. into custom connectors in Claude Web or distributed AI clients):
 ```bash

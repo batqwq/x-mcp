@@ -14,6 +14,7 @@ export interface OnboardingState {
     twitterapi_io?: string;
     getxapi?: string;
   };
+  oauthClients?: Record<string, string>; // { [clientId]: clientSecret }
 }
 
 export function defaultOnboardingState(): OnboardingState {
@@ -71,7 +72,8 @@ export async function completeOnboarding(preferredProvider: ProviderId | undefin
     preferredProvider,
     completedAt: new Date().toISOString(),
     lastOpenedAt: new Date().toISOString(),
-    apiKeys: current.apiKeys
+    apiKeys: current.apiKeys,
+    oauthClients: current.oauthClients
   };
   await writeOnboardingState(next, env);
   return next;
@@ -114,3 +116,31 @@ export function loadApiKeys(state: OnboardingState, env: EnvLike): void {
     }
   }
 }
+
+export async function saveOAuthClient(clientId: string, clientSecret: string, env: EnvLike = process.env): Promise<OnboardingState> {
+  const state = await readOnboardingState(env);
+  const next: OnboardingState = {
+    ...state,
+    oauthClients: {
+      ...state.oauthClients,
+      [clientId]: clientSecret
+    },
+    lastOpenedAt: new Date().toISOString()
+  };
+  await writeOnboardingState(next, env);
+  return next;
+}
+
+export async function deleteOAuthClient(clientId: string, env: EnvLike = process.env): Promise<OnboardingState> {
+  const state = await readOnboardingState(env);
+  const oauthClients = { ...state.oauthClients };
+  delete oauthClients[clientId];
+  const next: OnboardingState = {
+    ...state,
+    oauthClients,
+    lastOpenedAt: new Date().toISOString()
+  };
+  await writeOnboardingState(next, env);
+  return next;
+}
+

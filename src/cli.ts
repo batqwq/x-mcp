@@ -12,7 +12,6 @@ export interface CliConfig {
   port: number;
   allowedHosts: string[];
   accessToken?: string;
-  allowedMcpUsers?: Record<string, string | undefined>;
 }
 
 export function getStartupMode(args: string[], tty: TtyState): StartupMode {
@@ -82,39 +81,7 @@ export function parseCliArgs(args: string[], tty: TtyState, env: Record<string, 
     accessToken = env.X_MCP_ACCESS_TOKEN;
   }
 
-  // Parse --allowed-mcp-users
-  let allowedMcpUsers: Record<string, string | undefined> | undefined;
-  let rawUsers: string | undefined;
-  const mcpUsersIdx = args.indexOf("--allowed-mcp-users");
-  if (mcpUsersIdx !== -1 && mcpUsersIdx + 1 < args.length) {
-    rawUsers = args[mcpUsersIdx + 1]!;
-  } else if (env.ALLOWED_MCP_USERS) {
-    rawUsers = env.ALLOWED_MCP_USERS;
-  }
-
-  if (rawUsers) {
-    allowedMcpUsers = {};
-    const parts = rawUsers.split(",");
-    for (const part of parts) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const colonIdx = trimmed.indexOf(":");
-      if (colonIdx !== -1) {
-        const username = trimmed.substring(0, colonIdx).trim().toLowerCase();
-        const tokenVal = trimmed.substring(colonIdx + 1).trim();
-        if (username) {
-          allowedMcpUsers[username] = tokenVal || undefined;
-        }
-      } else {
-        const username = trimmed.toLowerCase();
-        if (username) {
-          allowedMcpUsers[username] = undefined;
-        }
-      }
-    }
-  }
-
-  return { mode, port, allowedHosts, accessToken, allowedMcpUsers };
+  return { mode, port, allowedHosts, accessToken };
 }
 
 export function helpText(): string {
@@ -132,7 +99,6 @@ Options:
   --port, -p <number>                   Port for SSE server (default: 3000)
   --allowed-hosts <hosts>               Comma-separated hosts allowed to connect, for DNS rebinding protection (e.g. localhost,x-mcp.render.com)
   --access-token <token>                Access Token to protect the SSE server (global mode)
-  --allowed-mcp-users <users>           Whitelist of authorized MCP users/tokens (e.g. batqwq:key1,guest:key2 or just batqwq,guest)
 
 Environment:
   TWITTERAPI_IO_KEY                     TwitterAPI.io API key
@@ -141,6 +107,5 @@ Environment:
   PORT                                  Default port for SSE server
   ALLOWED_HOSTS                         Default allowed hosts for SSE server (comma-separated)
   X_MCP_ACCESS_TOKEN                    Access Token to secure SSE and message HTTP endpoints (legacy global mode)
-  ALLOWED_MCP_USERS                     Comma-separated MCP users whitelist (username:token pairs or usernames only)
 `;
 }

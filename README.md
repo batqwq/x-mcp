@@ -59,6 +59,13 @@ MCP 客户端配置示例：
 
 ```bash
 npx -y github:batqwq/x-mcp --sse --port 3000
+
+#### 🔒 一键启动原生 HTTPS / TLS 服务 (零外部网关依赖)
+若您拥有自己的域名，且希望在服务器上直连启用加密的 HTTPS 服务以无缝对接 Claude，可以直接传入您的 SSL 证书路径：
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000 --ssl-key /path/to/privkey.pem --ssl-cert /path/to/fullchain.pem
+```
+服务拉起时将自动启动 HTTPS 强安全协议监听，终端控制台会自动高亮打印 `🔒 HTTPS SECURE MODE ACTIVE` 绿色安全卡片及您专属的安全 https 连接地址！
 ```
 
 当部署在公网环境时，强烈建议配置允许连接的域名（Allowed Hosts）以强制启用高级的 **DNS 重绑定 (DNS Rebinding) 防御**和 **CORS 跨域安全策略**：
@@ -67,7 +74,9 @@ npx -y github:batqwq/x-mcp --sse --port 3000
 npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.com
 ```
 
-* `GET /sse` — SSE 长连接握手端点。在 Claude 远程连接器（Remote Connector）中填写此 URL（例如 `http://localhost:3000/sse`）。
+* `GET /sse` — SSE 长连接握手端点。在 Claude 远程连接器（Remote Connector）中填写此 URL（例如 `https://your-domain.com/sse`）。
+* `--ssl-key <path>` — 原生 HTTPS 服务所需的私钥文件路径（如 `privkey.pem`）。亦可通过环境变量 `X_MCP_SSL_KEY` 传递。
+* `--ssl-cert <path>` — 原生 HTTPS 服务所需的完整证书链文件路径（如 `fullchain.pem`）。亦可通过环境变量 `X_MCP_SSL_CERT` 传递。
 * `POST /messages` — 消息接收与处理端点。
 * `--port, -p` — 端口，默认为 `3000` 或读取 `PORT` 环境变量。
 * `--allowed-hosts` — 逗号分割的允许请求主机，或配置 `ALLOWED_HOSTS` 环境变量。
@@ -203,9 +212,18 @@ npx -y github:batqwq/x-mcp --sse --port 3000
 ```
 For production deployments, pass `--allowed-hosts` to automatically enable DNS Rebinding protection and strict CORS validation against unauthorized origins:
 ```bash
-npx -y github:batqwq/x-mcp --sse --port 3000 --allowed-hosts your-x-mcp-server.com
+npx -y github:batqwq/x-mcp --sse --port 3000
+
+#### 🔒 Direct Native HTTPS / TLS Service Startup
+If you own a domain name and want to run native encrypted HTTPS directly on the node process (without Caddy/Nginx reverse proxies), pass your SSL certificate paths:
+```bash
+npx -y github:batqwq/x-mcp --sse --port 3000 --ssl-key /path/to/privkey.pem --ssl-cert /path/to/fullchain.pem
 ```
-* Use `http://localhost:3000/sse` in Claude's Remote Connector setup to start streaming.
+The server will automatically boot up TLS sockets and high-light a green `🔒 HTTPS SECURE MODE ACTIVE` banner with your direct secure https URL! --allowed-hosts your-x-mcp-server.com
+```
+* Use `https://your-domain.com/sse` in Claude's Remote Connector setup to start streaming.
+* `--ssl-key <path>` — Path to SSL private key file (e.g. `privkey.pem`) for native HTTPS mode. (Env: `X_MCP_SSL_KEY`)
+* `--ssl-cert <path>` — Path to SSL certificate chain file (e.g. `fullchain.pem`) for native HTTPS mode. (Env: `X_MCP_SSL_CERT`)
 
 **Access Token Authentication & MCP User Whitelist (Anti-Abuse protection)**: Protect your server's API provider keys from unauthorized billing/abuse in public environments.
 * **Whitelist configuration**: Pass `--allowed-mcp-users <users>` or set `ALLOWED_MCP_USERS` environment variable (comma-separated, e.g. `batqwq:secret1,guest:secret2` or just `batqwq,guest` for automatic token assignment).

@@ -10,6 +10,8 @@ import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
 import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
+import { createServer as createHttpsServer } from "node:https";
+import { readFileSync } from "node:fs";
 
 const providerSchema = z.enum(PROVIDER_IDS).describe("Provider to use. Overrides X_POST_PROVIDER when supplied.");
 const queryTypeSchema = z.enum(["Latest", "Top"]).default("Latest").describe("Search result product/order.");
@@ -182,7 +184,15 @@ async function main(): Promise<void> {
         }
       }
 
-      await runSseServer(config.port, config.allowedHosts, undefined, oauthClients, config.accessToken);
+      await runSseServer(
+        config.port,
+        config.allowedHosts,
+        undefined,
+        oauthClients,
+        config.accessToken,
+        config.sslKey,
+        config.sslCert
+      );
       return;
     }
   }
@@ -199,11 +209,35 @@ export async function runSseServer(
   allowedHosts: string[] = [],
   service?: XPostService,
   oauthClientsParam?: Record<string, string>,
-  globalAccessToken?: string
+  globalAccessToken?: string,
+  sslKey?: string,
+  sslCert?: string
 ): Promise<{ close: () => Promise<void> }> {
   const activeTransports = new Map<string, { transport: SSEServerTransport; clientId: string }>();
 
-  const httpServer = createHttpServer(async (req, res) => {
+  // 1. 尝试配置原生的 HTTPS/TLS 证书
+  let sslOptions: { key: Buffer; cert: Buffer } | undefined;
+  if (sslKey && sslCert) {
+    try {
+      sslOptions = {
+        key: readFileSync(sslKey),
+        cert: readFileSync(sslCert)
+      };
+    } catch (error) {
+      console.error("\n==============================================================");
+      console.error("❌  SSL ERROR (原生 HTTPS 证书加载失败):");
+      console.error("系统在加载配置的 HTTPS 证书或私钥文件时遇到致命错误：");
+      console.error(`  私钥路径 (ssl-key):  ${sslKey}`);
+      console.error(`  证书路径 (ssl-cert): ${sslCert}`);
+      console.error(`  错误描述:            ${error instanceof Error ? error.message : String(error)}`);
+      console.error("请仔细检查证书路径是否正确，以及当前运行账户是否有读取权限。");
+      console.error("==============================================================\n");
+      throw new Error(`Failed to load SSL certificates: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // HTTP 请求核心处理器
+  const httpHandler = async (req: any, res: any) => {
     // 安全响应头防御
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -360,7 +394,12 @@ export async function runSseServer(
 
     // 3. 兜底 404
     res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
-  });
+  };
+
+  // 2. 根据凭证动态选用 HTTPS 或 HTTP 服务器
+  const httpServer = sslOptions
+    ? createHttpsServer(sslOptions, httpHandler)
+    : createHttpServer(httpHandler);
 
   return new Promise<{ close: () => Promise<void> }>((resolve, reject) => {
     httpServer.on("error", (err) => {
@@ -368,7 +407,8 @@ export async function runSseServer(
     });
 
     httpServer.listen(port, async () => {
-      console.log(`x-post-mcp-server SSE server listening on port ${port}`);
+      const protocol = sslOptions ? "https" : "http";
+      console.log(`x-post-mcp-server SSE server listening on port ${port} (${protocol.toUpperCase()} mode)`);
       if (allowedHosts.length > 0) {
         console.log(`DNS Rebinding protection enabled. Allowed hosts: ${allowedHosts.join(", ")}`);
       } else {
@@ -386,12 +426,16 @@ export async function runSseServer(
       const displayClients = { ...oauthClientsParam, ...localClients };
       if (Object.keys(displayClients).length > 0) {
         console.log("\n==============================================================");
-        console.log("🔒 SECURITY NOTICE (开源安全警示 - Claude 远程连接凭证):");
+        if (sslOptions) {
+          console.log("🔒 HTTPS SECURE MODE ACTIVE (原生 HTTPS 安全模式已启动):");
+        } else {
+          console.log("🔒 SECURITY NOTICE (开源安全警示 - Claude 远程连接凭证):");
+        }
         console.log("为了防范公网盗刷付费 API 额度，系统已启动 OAuth 凭证安全强鉴权机制。");
         console.log("请在 Claude 客户端自定义连接器 (Custom Connectors -> Add Connector) 的");
         console.log("Advanced settings (高级设置) 中配置远程 MCP，并填入以下对应信息：");
         console.log("--------------------------------------------------------------");
-        console.log(`  Remote MCP URL:  http://localhost:${port}/sse`);
+        console.log(`  Remote MCP URL:  ${protocol}://localhost:${port}/sse`);
         
         let idx = 1;
         for (const [cid, secret] of Object.entries(displayClients)) {

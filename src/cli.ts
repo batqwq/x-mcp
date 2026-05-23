@@ -12,6 +12,8 @@ export interface CliConfig {
   port: number;
   allowedHosts: string[];
   accessToken?: string;
+  sslKey?: string;
+  sslCert?: string;
 }
 
 export function getStartupMode(args: string[], tty: TtyState): StartupMode {
@@ -81,7 +83,25 @@ export function parseCliArgs(args: string[], tty: TtyState, env: Record<string, 
     accessToken = env.X_MCP_ACCESS_TOKEN;
   }
 
-  return { mode, port, allowedHosts, accessToken };
+  // Parse --ssl-key
+  let sslKey: string | undefined;
+  const sslKeyIdx = args.indexOf("--ssl-key");
+  if (sslKeyIdx !== -1 && sslKeyIdx + 1 < args.length) {
+    sslKey = args[sslKeyIdx + 1]!;
+  } else if (env.X_MCP_SSL_KEY) {
+    sslKey = env.X_MCP_SSL_KEY;
+  }
+
+  // Parse --ssl-cert
+  let sslCert: string | undefined;
+  const sslCertIdx = args.indexOf("--ssl-cert");
+  if (sslCertIdx !== -1 && sslCertIdx + 1 < args.length) {
+    sslCert = args[sslCertIdx + 1]!;
+  } else if (env.X_MCP_SSL_CERT) {
+    sslCert = env.X_MCP_SSL_CERT;
+  }
+
+  return { mode, port, allowedHosts, accessToken, sslKey, sslCert };
 }
 
 export function helpText(): string {
@@ -99,6 +119,8 @@ Options:
   --port, -p <number>                   Port for SSE server (default: 3000)
   --allowed-hosts <hosts>               Comma-separated hosts allowed to connect, for DNS rebinding protection (e.g. localhost,x-mcp.render.com)
   --access-token <token>                Access Token to protect the SSE server (global mode)
+  --ssl-key <path>                      Path to SSL private key file (e.g. privkey.pem) for native HTTPS
+  --ssl-cert <path>                     Path to SSL certificate chain file (e.g. fullchain.pem) for native HTTPS
 
 Environment:
   TWITTERAPI_IO_KEY                     TwitterAPI.io API key
@@ -107,5 +129,8 @@ Environment:
   PORT                                  Default port for SSE server
   ALLOWED_HOSTS                         Default allowed hosts for SSE server (comma-separated)
   X_MCP_ACCESS_TOKEN                    Access Token to secure SSE and message HTTP endpoints (legacy global mode)
+  X_MCP_SSL_KEY                         Default path to SSL private key file
+  X_MCP_SSL_CERT                        Default path to SSL certificate chain file
+
 `;
 }

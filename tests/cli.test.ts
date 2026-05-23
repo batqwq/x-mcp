@@ -79,6 +79,18 @@ describe("parseCliArgs", () => {
     const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { X_MCP_ACCESS_TOKEN: "env-secret-222" });
     expect(config.accessToken).toBe("env-secret-222");
   });
+
+  it("parses explicit ssl options", () => {
+    const config = parseCliArgs(["--sse", "--ssl-key", "/path/to/key.pem", "--ssl-cert", "/path/to/cert.pem"], { stdin: true, stdout: true }, {});
+    expect(config.sslKey).toBe("/path/to/key.pem");
+    expect(config.sslCert).toBe("/path/to/cert.pem");
+  });
+
+  it("falls back to SSL envs", () => {
+    const config = parseCliArgs(["--sse"], { stdin: true, stdout: true }, { X_MCP_SSL_KEY: "env-key.pem", X_MCP_SSL_CERT: "env-cert.pem" });
+    expect(config.sslKey).toBe("env-key.pem");
+    expect(config.sslCert).toBe("env-cert.pem");
+  });
 });
 
 describe("helpText", () => {

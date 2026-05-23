@@ -1,6 +1,42 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...original,
+    readFileSync: (path: any, options?: any) => {
+      if (path === "key.pem") return Buffer.from("mock-key");
+      if (path === "cert.pem") return Buffer.from("mock-cert");
+      return original.readFileSync(path, options);
+    }
+  };
+});
+
+vi.mock("node:https", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:https")>();
+  return {
+    ...original,
+    createServer: (opts: any, handler: any) => {
+      if (opts && opts.key && opts.key.toString() === "mock-key") {
+        return {
+          listen: (port: number, cb: () => void) => {
+            if (cb) cb();
+          },
+          on: () => {},
+          close: (cb: () => void) => {
+            if (cb) cb();
+          }
+        } as any;
+      }
+      return original.createServer(opts, handler);
+    }
+  };
+});
+
 import { runSseServer } from "../src/index.js";
 import type { XPostService } from "../src/service.js";
+import * as fs from "node:fs";
+import * as https from "node:https";
 
 const mockService: XPostService = {
   getPost: vi.fn(async () => ({ id: "123", text: "hello" })),
@@ -173,5 +209,17 @@ describe("SSE Remote Server - POST /messages & Session Isolation", () => {
     expect(postRes3.status).toBe(202);
 
     await reader.cancel();
+  });
+});
+
+describe("SSE Remote Server - HTTPS Native Mode", () => {
+  it("successfully creates HTTPS server when sslKey and sslCert are provided", async () => {
+    // 调用 runSseServer。因为在顶部通过 vi.mock 拦截了 "key.pem" / "cert.pem"，
+    // 并且模拟了 https.createServer，它不会去读取真实磁盘文件，也不会底层报错。
+    const sseServer = await runSseServer(3009, [], mockService, { "client-id": "client-secret" }, undefined, "key.pem", "cert.pem");
+    expect(sseServer).toBeDefined();
+    
+    // 正常执行关闭
+    await sseServer.close();
   });
 });

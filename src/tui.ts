@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import type { Readable, Writable } from "node:stream";
-import { completeOnboarding, readOnboardingState, touchOnboarding, type OnboardingState } from "./onboarding.js";
+import { completeOnboarding, loadApiKeys, readOnboardingState, saveApiKey, touchOnboarding, type OnboardingState } from "./onboarding.js";
 import type { EnvLike, ProviderId } from "./types.js";
 import { normalizeApiKey, normalizeProviderId } from "./validation.js";
 
@@ -47,6 +47,7 @@ export function renderDashboard(status: ProviderEnvironmentStatus, state: Onboar
     "3. 生成 GetXAPI MCP 配置",
     "4. 查看 PowerShell 一键运行命令",
     "5. 标记 first-use onboarding 完成",
+    "6. 设置 API Key",
     "0. 退出",
     ""
   ].join("\n");
@@ -110,6 +111,27 @@ export function renderPowerShellCommands(provider: ProviderId): string {
   ].join("\n");
 }
 
+export function renderApiKeyPrompt(provider: ProviderId): string {
+  const providerName = provider === "twitterapi_io" ? "TwitterAPI.io" : "GetXAPI";
+  const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
+
+  return [
+    `设置 ${providerName} API Key`,
+    "",
+    `对应环境变量: ${envKey}`,
+    `输入 API Key 后将立即生效，并保存到本地配置文件。`,
+    `下次启动 TUI 时会自动加载（环境变量优先级更高）。`,
+    ""
+  ].join("\n");
+}
+
+export function maskApiKey(key: string): string {
+  if (key.length <= 8) {
+    return "*".repeat(key.length);
+  }
+  return `${key.slice(0, 4)}${"*".repeat(key.length - 8)}${key.slice(-4)}`;
+}
+
 export async function runTui(options: TuiOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
   const input = options.input ?? defaultInput;
@@ -122,6 +144,9 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
   } catch {
     // The TUI remains useful even if the local onboarding marker cannot be written.
   }
+
+  // Restore persisted API keys into env (env vars take precedence).
+  loadApiKeys(state, env);
 
   try {
     let running = true;
@@ -146,9 +171,27 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
         case "5":
           try {
             state = await completeOnboarding(await askProvider(rl), env);
-            await pause(output, rl, "首次使用引导已标记完成。不会保存 API Key，只保存 onboarding 状态。");
+            await pause(output, rl, "首次使用引导已标记完成。");
           } catch (error) {
             await pause(output, rl, `无法写入 onboarding 状态：${error instanceof Error ? error.message : String(error)}`);
+          }
+          break;
+        case "6":
+          try {
+            const provider = await askProvider(rl);
+            output.write(`${CLEAR_SCREEN}${renderApiKeyPrompt(provider)}`);
+            const apiKey = await askQuestion(rl, "API Key: ", "");
+            const trimmedKey = apiKey.trim();
+            if (!trimmedKey) {
+              await pause(output, rl, "API Key 不能为空，未做任何修改。");
+            } else {
+              const envKey = provider === "twitterapi_io" ? "TWITTERAPI_IO_KEY" : "GETXAPI_KEY";
+              env[envKey] = trimmedKey;
+              state = await saveApiKey(provider, trimmedKey, env);
+              await pause(output, rl, `${provider === "twitterapi_io" ? "TwitterAPI.io" : "GetXAPI"} API Key 已设置并保存。\n显示: ${maskApiKey(trimmedKey)}`);
+            }
+          } catch (error) {
+            await pause(output, rl, `无法保存 API Key：${error instanceof Error ? error.message : String(error)}`);
           }
           break;
         case "0":
@@ -158,7 +201,7 @@ export async function runTui(options: TuiOptions = {}): Promise<void> {
           running = false;
           break;
         default:
-          await pause(output, rl, "未知选项，请输入 0-5。");
+          await pause(output, rl, "未知选项，请输入 0-6。");
           break;
       }
     }

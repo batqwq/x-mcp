@@ -10,6 +10,10 @@ export interface OnboardingState {
   preferredProvider?: ProviderId;
   completedAt?: string;
   lastOpenedAt?: string;
+  apiKeys?: {
+    twitterapi_io?: string;
+    getxapi?: string;
+  };
 }
 
 export function defaultOnboardingState(): OnboardingState {
@@ -60,13 +64,53 @@ export async function touchOnboarding(state: OnboardingState, env: EnvLike = pro
 }
 
 export async function completeOnboarding(preferredProvider: ProviderId | undefined, env: EnvLike = process.env): Promise<OnboardingState> {
+  const current = await readOnboardingState(env);
   const next: OnboardingState = {
     version: 1,
     completed: true,
     preferredProvider,
     completedAt: new Date().toISOString(),
+    lastOpenedAt: new Date().toISOString(),
+    apiKeys: current.apiKeys
+  };
+  await writeOnboardingState(next, env);
+  return next;
+}
+
+export async function saveApiKey(provider: ProviderId, apiKey: string, env: EnvLike = process.env): Promise<OnboardingState> {
+  const state = await readOnboardingState(env);
+  const encoded = Buffer.from(apiKey).toString("base64");
+  const providerKey = provider === "twitterapi_io" ? "twitterapi_io" : "getxapi";
+  const next: OnboardingState = {
+    ...state,
+    apiKeys: {
+      ...state.apiKeys,
+      [providerKey]: encoded
+    },
     lastOpenedAt: new Date().toISOString()
   };
   await writeOnboardingState(next, env);
   return next;
+}
+
+export function loadApiKeys(state: OnboardingState, env: EnvLike): void {
+  if (!state.apiKeys) {
+    return;
+  }
+
+  if (state.apiKeys.twitterapi_io && !env.TWITTERAPI_IO_KEY) {
+    try {
+      env.TWITTERAPI_IO_KEY = Buffer.from(state.apiKeys.twitterapi_io, "base64").toString("utf8");
+    } catch {
+      // Ignore malformed stored key.
+    }
+  }
+
+  if (state.apiKeys.getxapi && !env.GETXAPI_KEY) {
+    try {
+      env.GETXAPI_KEY = Buffer.from(state.apiKeys.getxapi, "base64").toString("utf8");
+    } catch {
+      // Ignore malformed stored key.
+    }
+  }
 }

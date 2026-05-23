@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultOnboardingState } from "../src/onboarding.js";
-import { getProviderEnvironmentStatus, renderDashboard, renderEnvironmentReport, renderMcpClientConfig, renderPowerShellCommands } from "../src/tui.js";
+import { getProviderEnvironmentStatus, maskApiKey, renderApiKeyPrompt, renderDashboard, renderEnvironmentReport, renderMcpClientConfig, renderPowerShellCommands } from "../src/tui.js";
 
 describe("TUI rendering", () => {
   it("renders first-use onboarding state", () => {
@@ -51,5 +51,42 @@ describe("TUI rendering", () => {
   it("generates PowerShell server commands", () => {
     expect(renderPowerShellCommands("twitterapi_io")).toContain("TWITTERAPI_IO_KEY");
     expect(renderPowerShellCommands("twitterapi_io")).toContain("--server");
+  });
+
+  it("renders API Key menu option in dashboard", () => {
+    const status = getProviderEnvironmentStatus({});
+    const screen = renderDashboard(status, defaultOnboardingState());
+
+    expect(screen).toContain("6. 设置 API Key");
+  });
+
+  it("renders API Key prompt for twitterapi_io", () => {
+    const prompt = renderApiKeyPrompt("twitterapi_io");
+
+    expect(prompt).toContain("TwitterAPI.io");
+    expect(prompt).toContain("TWITTERAPI_IO_KEY");
+  });
+
+  it("renders API Key prompt for getxapi", () => {
+    const prompt = renderApiKeyPrompt("getxapi");
+
+    expect(prompt).toContain("GetXAPI");
+    expect(prompt).toContain("GETXAPI_KEY");
+  });
+});
+
+describe("maskApiKey", () => {
+  it("fully masks short keys", () => {
+    expect(maskApiKey("abc")).toBe("***");
+    expect(maskApiKey("12345678")).toBe("********");
+  });
+
+  it("shows first 4 and last 4 for longer keys", () => {
+    expect(maskApiKey("abcdefghijklmnop")).toBe("abcd********mnop");
+  });
+
+  it("handles 9-character keys (edge case)", () => {
+    const result = maskApiKey("123456789");
+    expect(result).toBe("1234*6789");
   });
 });

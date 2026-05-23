@@ -7,7 +7,7 @@
 - TwitterAPI.io
 - GetXAPI
 
-本项目只做读取能力，不实现发帖、点赞、转推、私信或其他写入动作，也不会保存 API Key。
+本项目只做读取能力，不实现发帖、点赞、转推、私信或其他写入动作。API Key 可通过 TUI 直接输入并持久化保存。
 
 ## 一键运行
 
@@ -82,6 +82,19 @@ Provider 选择顺序：
 - `twitterapi_io`
 - `getxapi`
 
+### Provider Fallback
+
+当两个 provider 都配置了 API Key 时，如果主 provider 出现瞬态故障（HTTP 5xx、429 速率限制、网络错误），会自动尝试备用 provider。客户端错误（4xx，429 除外）不会触发 fallback。
+
+### TUI 直接设置 API Key
+
+在 TUI 中选择 `6. 设置 API Key` 可以直接输入 API Key：
+
+- 输入后立即在当前会话生效
+- 自动保存到本地配置文件（base64 编码）
+- 下次启动 TUI 时自动加载
+- 环境变量优先级高于保存的 Key
+
 ## 本地开发
 
 ```bash
@@ -146,6 +159,10 @@ npx -y github:batqwq/x-mcp
 ```
 
 Running in a terminal opens the first-use TUI. Use `--server` for MCP stdio mode. Set `TWITTERAPI_IO_KEY` or `GETXAPI_KEY` before starting the server. Optional `X_POST_PROVIDER` values are `twitterapi_io` and `getxapi`.
+
+**Provider fallback**: When both providers are configured, the server automatically tries the secondary provider on transient failures (5xx, 429, network errors). Client errors (4xx except 429) do not trigger fallback.
+
+**TUI API Key input**: Use menu option 6 in the TUI to enter API keys directly. Keys are persisted locally (base64-encoded) and restored on next TUI launch. Environment variables take precedence over saved keys.
 
 ## License
 

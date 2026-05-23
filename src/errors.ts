@@ -38,6 +38,17 @@ export class ProviderEmptyResultError extends XPostMcpError {
   }
 }
 
+export class ProviderFallbackError extends XPostMcpError {
+  readonly attempts: ReadonlyArray<{ provider: ProviderId; error: Error }>;
+
+  constructor(attempts: Array<{ provider: ProviderId; error: Error }>) {
+    const summary = attempts.map((a) => `${a.provider}: ${a.error.message}`).join("; ");
+    super(`All providers failed. ${summary}`);
+    this.name = "ProviderFallbackError";
+    this.attempts = attempts;
+  }
+}
+
 export class InvalidTweetIdentifierError extends XPostMcpError {
   constructor(input: string) {
     super(`Could not find a tweet status ID in "${input}". Pass a numeric tweet ID or an x.com/twitter.com status URL.`);

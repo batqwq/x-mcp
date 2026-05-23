@@ -17,14 +17,14 @@ Node.js 22+ 环境下，可以直接从 GitHub 运行，不需要手动 clone：
 npx -y github:batqwq/x-mcp
 ```
 
-运行前需要至少设置一个 provider key。
+终端直接运行会打开首次使用 TUI 引导。运行 MCP server 时需要至少设置一个 provider key。
 
 PowerShell 示例：
 
 ```powershell
 $env:TWITTERAPI_IO_KEY="your_twitterapi_io_key"
 $env:X_POST_PROVIDER="twitterapi_io"
-npx -y github:batqwq/x-mcp
+npx -y github:batqwq/x-mcp --server
 ```
 
 也可以使用 GetXAPI：
@@ -32,7 +32,7 @@ npx -y github:batqwq/x-mcp
 ```powershell
 $env:GETXAPI_KEY="your_getxapi_key"
 $env:X_POST_PROVIDER="getxapi"
-npx -y github:batqwq/x-mcp
+npx -y github:batqwq/x-mcp --server
 ```
 
 MCP 客户端配置示例：
@@ -42,7 +42,7 @@ MCP 客户端配置示例：
   "mcpServers": {
     "x-post": {
       "command": "npx",
-      "args": ["-y", "github:batqwq/x-mcp"],
+      "args": ["-y", "github:batqwq/x-mcp", "--server"],
       "env": {
         "TWITTERAPI_IO_KEY": "your_twitterapi_io_key",
         "GETXAPI_KEY": "your_getxapi_key",
@@ -97,6 +97,18 @@ npm run smoke
 npm start
 ```
 
+本地 TUI：
+
+```bash
+npm run tui
+```
+
+本地 MCP server：
+
+```bash
+npm run server
+```
+
 ## Provider Endpoints
 
 TwitterAPI.io:
@@ -126,7 +138,7 @@ One-command GitHub run:
 npx -y github:batqwq/x-mcp
 ```
 
-Set `TWITTERAPI_IO_KEY` or `GETXAPI_KEY` before running. Optional `X_POST_PROVIDER` values are `twitterapi_io` and `getxapi`.
+Running in a terminal opens the first-use TUI. Use `--server` for MCP stdio mode. Set `TWITTERAPI_IO_KEY` or `GETXAPI_KEY` before starting the server. Optional `X_POST_PROVIDER` values are `twitterapi_io` and `getxapi`.
 
 ## License
 

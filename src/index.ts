@@ -3,7 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { getStartupMode, helpText } from "./cli.js";
 import { createXPostService, type XPostService } from "./service.js";
+import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
 
 const providerSchema = z.enum(PROVIDER_IDS).describe("Provider to use. Overrides X_POST_PROVIDER when supplied.");
@@ -138,12 +140,29 @@ function serializeError(error: unknown): Record<string, unknown> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv.includes("--smoke")) {
-    createServer();
-    console.log("x-post-mcp-server smoke check ok");
-    return;
-  }
+  const mode = getStartupMode(process.argv.slice(2), {
+    stdin: Boolean(process.stdin.isTTY),
+    stdout: Boolean(process.stdout.isTTY)
+  });
 
+  switch (mode) {
+    case "smoke":
+      createServer();
+      console.log("x-post-mcp-server smoke check ok");
+      return;
+    case "help":
+      console.log(helpText());
+      return;
+    case "tui":
+      await runTui();
+      return;
+    case "server":
+      await runMcpServer();
+      return;
+  }
+}
+
+async function runMcpServer(): Promise<void> {
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

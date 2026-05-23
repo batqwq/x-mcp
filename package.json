@@ -35,6 +35,8 @@
     "prepare": "npm run build",
     "prestart": "npm run build",
     "start": "node dist/index.js",
+    "server": "node dist/index.js --server",
+    "tui": "node dist/index.js --tui",
     "smoke": "node dist/index.js --smoke",
     "test": "vitest run",
     "test:watch": "vitest"

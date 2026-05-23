@@ -1,8 +1,9 @@
 import { ProviderConfigError, XPostMcpError } from "./errors.js";
-import { cleanUserName, parseTweetId } from "./xPostUrl.js";
+import { cleanUserName, normalizeUserName, parseTweetId } from "./xPostUrl.js";
 import { GetXApiProvider } from "./providers/getxapi.js";
 import { TwitterApiIoProvider } from "./providers/twitterapiIo.js";
 import { PROVIDER_IDS, type EnvLike, type FetchLike, type ProviderId, type SearchProduct, type XPostProvider } from "./types.js";
+import { normalizeApiKey, normalizeProviderId, normalizeSearchProduct, optionalNonBlank, requireNonBlank } from "./validation.js";
 
 export interface XPostService {
   getPost(input: { idOrUrl: string; provider?: ProviderId }): Promise<unknown>;
@@ -22,9 +23,9 @@ export function createXPostService(env: EnvLike = process.env, fetchImpl: FetchL
     async searchPosts(input) {
       const provider = createProvider(resolveProviderId(input.provider, env), env, fetchImpl);
       return provider.searchPosts({
-        query: input.query,
-        queryType: input.queryType ?? "Latest",
-        cursor: input.cursor
+        query: requireNonBlank(input.query, "query"),
+        queryType: normalizeSearchProduct(input.queryType),
+        cursor: optionalNonBlank(input.cursor)
       });
     },
 
@@ -35,17 +36,18 @@ export function createXPostService(env: EnvLike = process.env, fetchImpl: FetchL
 
     async getUserPosts(input) {
       const provider = createProvider(resolveProviderId(input.provider, env), env, fetchImpl);
-      const userName = input.userName ? cleanUserName(input.userName) : undefined;
+      const userName = normalizeUserName(input.userName);
+      const userId = optionalNonBlank(input.userId);
 
-      if (!userName && !input.userId) {
+      if (!userName && !userId) {
         throw new XPostMcpError("Pass either userName or userId.");
       }
 
       return provider.getUserPosts({
         userName,
-        userId: input.userId,
+        userId,
         includeReplies: input.includeReplies ?? false,
-        cursor: input.cursor
+        cursor: optionalNonBlank(input.cursor)
       });
     },
 
@@ -63,17 +65,18 @@ export function resolveProviderId(requested: ProviderId | undefined, env: EnvLik
 
   const envDefault = env.X_POST_PROVIDER;
   if (envDefault) {
-    if (isProviderId(envDefault)) {
-      return envDefault;
+    const normalized = normalizeProviderId(envDefault);
+    if (normalized) {
+      return normalized;
     }
     throw new ProviderConfigError(`Invalid X_POST_PROVIDER "${envDefault}". Expected one of: ${PROVIDER_IDS.join(", ")}.`);
   }
 
-  if (env.TWITTERAPI_IO_KEY) {
+  if (normalizeApiKey(env.TWITTERAPI_IO_KEY)) {
     return "twitterapi_io";
   }
 
-  if (env.GETXAPI_KEY) {
+  if (normalizeApiKey(env.GETXAPI_KEY)) {
     return "getxapi";
   }
 
@@ -82,18 +85,16 @@ export function resolveProviderId(requested: ProviderId | undefined, env: EnvLik
 
 export function createProvider(providerId: ProviderId, env: EnvLike, fetchImpl: FetchLike = fetch): XPostProvider {
   if (providerId === "twitterapi_io") {
-    if (!env.TWITTERAPI_IO_KEY) {
+    const apiKey = normalizeApiKey(env.TWITTERAPI_IO_KEY);
+    if (!apiKey) {
       throw new ProviderConfigError("TWITTERAPI_IO_KEY is required for provider twitterapi_io.");
     }
-    return new TwitterApiIoProvider(env.TWITTERAPI_IO_KEY, fetchImpl);
+    return new TwitterApiIoProvider(apiKey, fetchImpl);
   }
 
-  if (!env.GETXAPI_KEY) {
+  const apiKey = normalizeApiKey(env.GETXAPI_KEY);
+  if (!apiKey) {
     throw new ProviderConfigError("GETXAPI_KEY is required for provider getxapi.");
   }
-  return new GetXApiProvider(env.GETXAPI_KEY, fetchImpl);
-}
-
-function isProviderId(value: string): value is ProviderId {
-  return PROVIDER_IDS.includes(value as ProviderId);
+  return new GetXApiProvider(apiKey, fetchImpl);
 }

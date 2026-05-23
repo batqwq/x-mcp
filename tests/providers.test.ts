@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProviderHttpError } from "../src/errors.js";
+import { ProviderEmptyResultError, ProviderHttpError, XPostMcpError } from "../src/errors.js";
 import { GetXApiProvider } from "../src/providers/getxapi.js";
 import { TwitterApiIoProvider } from "../src/providers/twitterapiIo.js";
 import type { FetchLike } from "../src/types.js";
@@ -103,6 +103,44 @@ describe("provider error handling", () => {
     const provider = new GetXApiProvider("getx-key", fetchMock);
 
     await expect(provider.getPost("12345")).rejects.toThrow(ProviderHttpError);
+  });
+
+  it("wraps network failures in ProviderHttpError", async () => {
+    const fetchMock = vi.fn<FetchLike>(async () => {
+      throw new Error("socket closed");
+    });
+    const provider = new GetXApiProvider("getx-key", fetchMock);
+
+    await expect(provider.getPost("12345")).rejects.toThrow(ProviderHttpError);
+  });
+
+  it("rejects non-JSON success responses", async () => {
+    const fetchMock = vi.fn<FetchLike>(async () => new Response("not json", { status: 200 }));
+    const provider = new GetXApiProvider("getx-key", fetchMock);
+
+    await expect(provider.getPost("12345")).rejects.toThrow(ProviderHttpError);
+  });
+
+  it("rejects empty tweet detail results", async () => {
+    const fetchMock = jsonFetch({ status: "success", data: null });
+    const provider = new GetXApiProvider("getx-key", fetchMock);
+
+    await expect(provider.getPost("12345")).rejects.toThrow(ProviderEmptyResultError);
+  });
+
+  it("rejects GetXAPI replies by userId because that endpoint requires userName", async () => {
+    const fetchMock = jsonFetch({ tweets: [] });
+    const provider = new GetXApiProvider("getx-key", fetchMock);
+
+    await expect(provider.getUserPosts({ userId: "123", includeReplies: true })).rejects.toThrow(XPostMcpError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed search responses missing tweets", async () => {
+    const fetchMock = jsonFetch({ has_more: false });
+    const provider = new GetXApiProvider("getx-key", fetchMock);
+
+    await expect(provider.searchPosts({ query: "from:OpenAI", queryType: "Latest" })).rejects.toThrow(ProviderHttpError);
   });
 });
 

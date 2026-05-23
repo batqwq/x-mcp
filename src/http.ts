@@ -1,6 +1,8 @@
 import { ProviderHttpError } from "./errors.js";
 import type { FetchLike, ProviderId } from "./types.js";
 
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 export function buildUrl(baseUrl: string, path: string, params: Record<string, string | number | boolean | undefined>): URL {
   const url = new URL(path, baseUrl);
 
@@ -20,16 +22,24 @@ export async function fetchJson(
   url: URL,
   headers: Record<string, string>
 ): Promise<unknown> {
-  const response = await fetchImpl(url, {
-    method: "GET",
-    headers: {
-      accept: "application/json",
-      ...headers
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        ...headers
+      },
+      signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+    });
+  } catch (error) {
+    throw new ProviderHttpError(provider, `${provider} request failed before receiving a response: ${errorMessage(error)}`, undefined, {
+      url: url.toString()
+    });
+  }
 
   const text = await response.text();
-  const body = parseJson(text);
+  const body = parseJson(provider, text, response.ok, url);
 
   if (!response.ok) {
     throw new ProviderHttpError(provider, formatHttpError(provider, response.status, response.statusText, body), response.status, body);
@@ -56,9 +66,19 @@ export function arrayField(body: unknown, key: string): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+export function requiredArrayField(provider: ProviderId, body: unknown, key: string): unknown[] {
+  const record = asRecord(body);
+  const value = record?.[key];
+  if (!Array.isArray(value)) {
+    throw new ProviderHttpError(provider, `${provider} response is missing array field "${key}".`, undefined, body);
+  }
+  return value;
+}
+
 export function booleanField(body: unknown, key: string): boolean {
   const record = asRecord(body);
-  return Boolean(record?.[key]);
+  const value = record?.[key];
+  return value === true || value === "true" || value === 1;
 }
 
 export function stringField(body: unknown, key: string): string | null {
@@ -72,7 +92,7 @@ export function dataField(body: unknown): unknown {
   return record?.data ?? null;
 }
 
-function parseJson(text: string): unknown {
+function parseJson(provider: ProviderId, text: string, ok: boolean, url: URL): unknown {
   if (!text.trim()) {
     return null;
   }
@@ -80,6 +100,12 @@ function parseJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
+    if (ok) {
+      throw new ProviderHttpError(provider, `${provider} returned a non-JSON response.`, undefined, {
+        url: url.toString(),
+        bodyPreview: text.slice(0, 200)
+      });
+    }
     return text;
   }
 }
@@ -121,4 +147,8 @@ function stringifyMessage(value: unknown): string | null {
   } catch {
     return String(value);
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

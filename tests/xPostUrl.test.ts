@@ -7,6 +7,10 @@ describe("parseTweetId", () => {
     expect(parseTweetId("2019264360682778716")).toBe("2019264360682778716");
   });
 
+  it("accepts very old short numeric tweet IDs", () => {
+    expect(parseTweetId("20")).toBe("20");
+  });
+
   it("extracts IDs from x.com status URLs", () => {
     expect(parseTweetId("https://x.com/elonmusk/status/2019264360682778716?s=20")).toBe("2019264360682778716");
   });

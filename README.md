@@ -109,6 +109,13 @@ npm run tui
 npm run server
 ```
 
+## 维护
+
+- 质量修复清单：[docs/QUALITY_FIXES.md](docs/QUALITY_FIXES.md)
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全策略：[SECURITY.md](SECURITY.md)
+- 更新日志：[CHANGELOG.md](CHANGELOG.md)
+
 ## Provider Endpoints
 
 TwitterAPI.io:

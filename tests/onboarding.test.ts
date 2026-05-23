@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { completeOnboarding, onboardingStatePath, readOnboardingState } from "../src/onboarding.js";
+import { completeOnboarding, onboardingStatePath, readOnboardingState, writeOnboardingState } from "../src/onboarding.js";
 
 const tempDirs: string[] = [];
 
@@ -28,5 +28,27 @@ describe("onboarding state", () => {
     expect(state.completed).toBe(true);
     expect(state.preferredProvider).toBe("twitterapi_io");
     expect(raw).not.toContain("secret");
+  });
+
+  it("ignores blank X_MCP_HOME instead of writing to a relative path", async () => {
+    const path = onboardingStatePath({ X_MCP_HOME: "", APPDATA: "C:\\Users\\Example\\AppData\\Roaming" });
+
+    expect(path).toContain("x-mcp");
+    expect(path).not.toBe("onboarding.json");
+  });
+
+  it("sanitizes invalid provider values from existing state files", async () => {
+    const home = await mkdtemp(join(tmpdir(), "x-mcp-onboarding-"));
+    tempDirs.push(home);
+    const env = { X_MCP_HOME: home };
+    const path = onboardingStatePath(env);
+    await writeOnboardingState({ version: 1, completed: true, preferredProvider: "getxapi" }, env);
+    await writeFile(path, '{"version":1,"completed":true,"preferredProvider":"bad"}\n', "utf8");
+
+    const state = await readOnboardingState(env);
+
+    expect(dirname(path)).toBe(home);
+    expect(state.completed).toBe(true);
+    expect(state.preferredProvider).toBeUndefined();
   });
 });

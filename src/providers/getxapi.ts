@@ -1,4 +1,5 @@
-import { arrayField, booleanField, buildUrl, dataField, fetchJson, stringField } from "../http.js";
+import { ProviderEmptyResultError, XPostMcpError } from "../errors.js";
+import { arrayField, booleanField, buildUrl, dataField, fetchJson, requiredArrayField, stringField } from "../http.js";
 import type { FetchLike, ProviderAccountResult, ProviderPostResult, ProviderPostsResult, ProviderUserResult, SearchPostsInput, UserPostsInput, XPostProvider } from "../types.js";
 
 const BASE_URL = "https://api.getxapi.com";
@@ -13,9 +14,13 @@ export class GetXApiProvider implements XPostProvider {
 
   async getPost(id: string): Promise<ProviderPostResult> {
     const raw = await this.get("/twitter/tweet/detail", { id });
+    const tweet = dataField(raw);
+    if (!tweet) {
+      throw new ProviderEmptyResultError(this.id, `tweet for id ${id}`);
+    }
     return {
       provider: this.id,
-      tweet: dataField(raw),
+      tweet,
       raw
     };
   }
@@ -31,14 +36,24 @@ export class GetXApiProvider implements XPostProvider {
 
   async getUserInfo(userName: string): Promise<ProviderUserResult> {
     const raw = await this.get("/twitter/user/info", { userName });
+    const user = dataField(raw);
+    if (!user) {
+      throw new ProviderEmptyResultError(this.id, `user profile for ${userName}`);
+    }
     return {
       provider: this.id,
-      user: dataField(raw),
+      user,
       raw
     };
   }
 
   async getUserPosts(input: UserPostsInput): Promise<ProviderPostsResult> {
+    if (input.includeReplies && !input.userName) {
+      throw new XPostMcpError("GetXAPI tweets_and_replies requires userName.");
+    }
+    if (!input.userName && !input.userId) {
+      throw new XPostMcpError("GetXAPI user posts require userName or userId.");
+    }
     const path = input.includeReplies ? "/twitter/user/tweets_and_replies" : "/twitter/user/tweets";
     const raw = await this.get(path, {
       userName: input.userName,
@@ -66,7 +81,7 @@ export class GetXApiProvider implements XPostProvider {
   private normalizeTweets(raw: unknown): ProviderPostsResult {
     return {
       provider: this.id,
-      tweets: arrayField(raw, "tweets"),
+      tweets: requiredArrayField(this.id, raw, "tweets"),
       hasMore: booleanField(raw, "has_more"),
       nextCursor: stringField(raw, "next_cursor"),
       raw

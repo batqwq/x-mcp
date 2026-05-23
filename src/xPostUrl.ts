@@ -1,6 +1,7 @@
 import { InvalidTweetIdentifierError } from "./errors.js";
+import { normalizeUserName, requireUserName } from "./validation.js";
 
-const NUMERIC_ID_RE = /^\d{5,30}$/;
+const NUMERIC_ID_RE = /^\d{1,30}$/;
 
 export function parseTweetId(idOrUrl: string): string {
   const value = idOrUrl.trim();
@@ -33,5 +34,7 @@ export function parseTweetId(idOrUrl: string): string {
 }
 
 export function cleanUserName(userName: string): string {
-  return userName.trim().replace(/^@+/, "");
+  return requireUserName(userName);
 }
+
+export { normalizeUserName };

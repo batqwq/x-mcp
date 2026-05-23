@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EnvLike, ProviderId } from "./types.js";
+import { normalizeProviderId, optionalNonBlank } from "./validation.js";
 
 export interface OnboardingState {
   version: 1;
@@ -19,7 +20,9 @@ export function defaultOnboardingState(): OnboardingState {
 }
 
 export function onboardingStatePath(env: EnvLike = process.env): string {
-  const baseDir = env.X_MCP_HOME ?? (env.APPDATA ? join(env.APPDATA, "x-mcp") : join(homedir(), ".x-mcp"));
+  const configuredHome = optionalNonBlank(env.X_MCP_HOME);
+  const appData = optionalNonBlank(env.APPDATA);
+  const baseDir = configuredHome ?? (appData ? join(appData, "x-mcp") : join(homedir(), ".x-mcp"));
   return join(baseDir, "onboarding.json");
 }
 
@@ -31,7 +34,8 @@ export async function readOnboardingState(env: EnvLike = process.env): Promise<O
       ...defaultOnboardingState(),
       ...parsed,
       version: 1,
-      completed: Boolean(parsed.completed)
+      completed: Boolean(parsed.completed),
+      preferredProvider: normalizeProviderId(parsed.preferredProvider)
     };
   } catch {
     return defaultOnboardingState();
@@ -41,7 +45,9 @@ export async function readOnboardingState(env: EnvLike = process.env): Promise<O
 export async function writeOnboardingState(state: OnboardingState, env: EnvLike = process.env): Promise<void> {
   const filePath = onboardingStatePath(env);
   await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await rename(tempPath, filePath);
 }
 
 export async function touchOnboarding(state: OnboardingState, env: EnvLike = process.env): Promise<OnboardingState> {

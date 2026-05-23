@@ -7,20 +7,30 @@ describe("TUI rendering", () => {
     const status = getProviderEnvironmentStatus({});
     const screen = renderDashboard(status, defaultOnboardingState());
 
-    expect(screen).toContain("首次使用引导");
+    expect(screen).toContain("first-use onboarding");
     expect(screen).toContain("未配置");
-    expect(screen).toContain("标记首次使用引导完成");
+    expect(screen).toContain("标记 first-use onboarding 完成");
   });
 
   it("renders configured provider status", () => {
     const status = getProviderEnvironmentStatus({
-      TWITTERAPI_IO_KEY: "key",
-      X_POST_PROVIDER: "twitterapi_io"
+      TWITTERAPI_IO_KEY: " key ",
+      X_POST_PROVIDER: "TwitterAPI.io"
     });
     const report = renderEnvironmentReport(status);
 
     expect(report).toContain("已配置 TWITTERAPI_IO_KEY");
     expect(report).toContain("twitterapi_io");
+  });
+
+  it("does not treat blank provider keys as configured", () => {
+    const status = getProviderEnvironmentStatus({
+      TWITTERAPI_IO_KEY: " ",
+      GETXAPI_KEY: ""
+    });
+
+    expect(status.twitterapiIoConfigured).toBe(false);
+    expect(status.getxapiConfigured).toBe(false);
   });
 
   it("generates explicit MCP server config for npx", () => {

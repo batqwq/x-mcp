@@ -3,6 +3,7 @@ import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import type { Readable, Writable } from "node:stream";
 import { completeOnboarding, readOnboardingState, touchOnboarding, type OnboardingState } from "./onboarding.js";
 import type { EnvLike, ProviderId } from "./types.js";
+import { normalizeApiKey, normalizeProviderId } from "./validation.js";
 
 const CLEAR_SCREEN = "\x1b[2J\x1b[H";
 
@@ -19,32 +20,33 @@ export interface TuiOptions {
 }
 
 export function getProviderEnvironmentStatus(env: EnvLike): ProviderEnvironmentStatus {
+  const normalizedDefault = normalizeProviderId(env.X_POST_PROVIDER);
   return {
-    twitterapiIoConfigured: Boolean(env.TWITTERAPI_IO_KEY),
-    getxapiConfigured: Boolean(env.GETXAPI_KEY),
-    defaultProvider: env.X_POST_PROVIDER
+    twitterapiIoConfigured: Boolean(normalizeApiKey(env.TWITTERAPI_IO_KEY)),
+    getxapiConfigured: Boolean(normalizeApiKey(env.GETXAPI_KEY)),
+    defaultProvider: normalizedDefault ?? env.X_POST_PROVIDER?.trim()
   };
 }
 
 export function renderDashboard(status: ProviderEnvironmentStatus, state: OnboardingState): string {
-  const title = state.completed ? "x-mcp TUI" : "x-mcp 首次使用引导";
+  const title = state.completed ? "x-mcp TUI" : "x-mcp first-use onboarding";
   const setupState = state.completed ? "已完成" : "未完成";
 
   return [
-    "┌────────────────────────────────────────────┐",
-    `│ ${pad(title, 42)} │`,
-    "├────────────────────────────────────────────┤",
-    `│ Onboarding: ${pad(setupState, 28)} │`,
-    `│ TwitterAPI.io key: ${pad(status.twitterapiIoConfigured ? "已配置" : "未配置", 21)} │`,
-    `│ GetXAPI key:       ${pad(status.getxapiConfigured ? "已配置" : "未配置", 21)} │`,
-    `│ Default provider:  ${pad(status.defaultProvider ?? "未设置", 21)} │`,
-    "└────────────────────────────────────────────┘",
+    "============================================",
+    title,
+    "============================================",
+    `Onboarding:        ${setupState}`,
+    `TwitterAPI.io key: ${status.twitterapiIoConfigured ? "已配置" : "未配置"}`,
+    `GetXAPI key:       ${status.getxapiConfigured ? "已配置" : "未配置"}`,
+    `Default provider:  ${status.defaultProvider ?? "未设置"}`,
+    "--------------------------------------------",
     "",
     "1. 查看环境检查",
     "2. 生成 TwitterAPI.io MCP 配置",
     "3. 生成 GetXAPI MCP 配置",
     "4. 查看 PowerShell 一键运行命令",
-    "5. 标记首次使用引导完成",
+    "5. 标记 first-use onboarding 完成",
     "0. 退出",
     ""
   ].join("\n");
@@ -188,8 +190,4 @@ async function askQuestion(rl: ReturnType<typeof createInterface>, question: str
     }
     throw error;
   }
-}
-
-function pad(value: string, length: number): string {
-  return value.length >= length ? value.slice(0, length) : `${value}${" ".repeat(length - value.length)}`;
 }

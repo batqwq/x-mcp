@@ -9,7 +9,7 @@ import { parseCliArgs, helpText } from "./cli.js";
 import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
-import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
+import { loadApiKeys, readOnboardingState, saveOAuthClient } from "./onboarding.js";
 import { compactJsonText, transformResponse, type TransformOptions, type XToolName } from "./output.js";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
@@ -239,6 +239,7 @@ async function main(): Promise<void> {
       await runTui();
       return;
     case "server":
+      await loadStoredApiKeys();
       await runMcpServer();
       return;
     case "sse": {
@@ -279,6 +280,7 @@ async function main(): Promise<void> {
 
       // 从本地读取 onboarding 状态
       const state = await readOnboardingState();
+      loadApiKeys(state, process.env);
       let oauthClients = state.oauthClients ?? {};
 
       // 如果完全没有任何凭据，且没有配置全局 accessToken，系统自动生成默认的 Client ID & Secret
@@ -313,6 +315,14 @@ async function runMcpServer(): Promise<void> {
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+async function loadStoredApiKeys(): Promise<void> {
+  try {
+    loadApiKeys(await readOnboardingState(), process.env);
+  } catch {
+    // Stored keys are optional; provider config errors stay explicit at call time.
+  }
 }
 
 export async function runSseServer(
@@ -403,6 +413,7 @@ export async function runSseServer(
     let localClients: Record<string, string> = {};
     try {
       const state = await readOnboardingState();
+      loadApiKeys(state, process.env);
       localClients = state.oauthClients ?? {};
     } catch {
       // ignore
@@ -531,6 +542,7 @@ export async function runSseServer(
       let localClients: Record<string, string> = {};
       try {
         const state = await readOnboardingState();
+        loadApiKeys(state, process.env);
         localClients = state.oauthClients ?? {};
       } catch {
         // ignore

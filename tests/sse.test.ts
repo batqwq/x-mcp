@@ -35,9 +35,13 @@ vi.mock("node:https", async (importOriginal) => {
 
 import { runSseServer } from "../src/index.js";
 import type { XPostService } from "../src/service.js";
+import { saveApiKey } from "../src/onboarding.js";
 import * as fs from "node:fs";
 import * as https from "node:https";
 import { request as httpRequest } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const mockService: XPostService = {
   getPost: vi.fn(async () => ({ id: "123", text: "hello" })),
@@ -256,6 +260,55 @@ describe("SSE Remote Server - POST /messages & Session Isolation", () => {
     expect(postRes4.status).toBe(202);
 
     await reader.cancel();
+  });
+});
+
+describe("SSE Remote Server - stored provider keys", () => {
+  it("loads saved onboarding provider keys into the runtime environment", async () => {
+    const originalHome = process.env.X_MCP_HOME;
+    const originalGetx = process.env.GETXAPI_KEY;
+    const originalTwitter = process.env.TWITTERAPI_IO_KEY;
+    const dir = await mkdtemp(join(tmpdir(), "x-mcp-sse-onboarding-"));
+    const port = 4571;
+    let sseServer: { close: () => Promise<void> } | undefined;
+
+    try {
+      process.env.X_MCP_HOME = dir;
+      delete process.env.GETXAPI_KEY;
+      delete process.env.TWITTERAPI_IO_KEY;
+      await saveApiKey("getxapi", "stored-getx-key", { X_MCP_HOME: dir });
+
+      sseServer = await runSseServer(port, ["localhost:4571", "localhost"], mockService, { "client-id": "client-secret" });
+      const credentials = Buffer.from("client-id:client-secret").toString("base64");
+      const res = await fetch(`http://localhost:${port}/sse`, {
+        headers: {
+          Authorization: `Basic ${credentials}`
+        }
+      });
+      expect(res.status).toBe(200);
+      expect(process.env.GETXAPI_KEY).toBe("stored-getx-key");
+
+      const reader = res.body?.getReader();
+      await reader?.cancel();
+    } finally {
+      await sseServer?.close();
+      if (originalHome === undefined) {
+        delete process.env.X_MCP_HOME;
+      } else {
+        process.env.X_MCP_HOME = originalHome;
+      }
+      if (originalGetx === undefined) {
+        delete process.env.GETXAPI_KEY;
+      } else {
+        process.env.GETXAPI_KEY = originalGetx;
+      }
+      if (originalTwitter === undefined) {
+        delete process.env.TWITTERAPI_IO_KEY;
+      } else {
+        process.env.TWITTERAPI_IO_KEY = originalTwitter;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -18,16 +18,20 @@ interface PruneOptions {
   readonly keepZero?: boolean;
 }
 
-const AUTHOR_FIELDS = [
+const TWEET_AUTHOR_FIELDS = [
   "id",
   "name",
   "userName",
-  "description",
-  "location",
   "followers",
   "following",
   "isBlueVerified",
   "profilePicture"
+] as const;
+
+const USER_INFO_FIELDS = [
+  ...TWEET_AUTHOR_FIELDS,
+  "description",
+  "location"
 ] as const;
 
 const SLIM_AUTHOR_FIELDS = [
@@ -248,9 +252,9 @@ function pickKnownFields(source: JsonRecord, includeUserInfoExtra: boolean, slim
   if (slim) {
     fields = SLIM_AUTHOR_FIELDS;
   } else if (includeUserInfoExtra) {
-    fields = [...AUTHOR_FIELDS, ...USER_INFO_EXTRA_FIELDS];
+    fields = [...USER_INFO_FIELDS, ...USER_INFO_EXTRA_FIELDS];
   } else {
-    fields = AUTHOR_FIELDS;
+    fields = TWEET_AUTHOR_FIELDS;
   }
   for (const field of fields) {
     output[field] = source[field];

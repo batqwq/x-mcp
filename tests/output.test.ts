@@ -70,7 +70,6 @@ describe("transformResponse", () => {
           id: "157792279",
           name: "Raz",
           userName: "Raz_09_",
-          location: "Earth",
           followers: 2459,
           profilePicture: "https://pbs.twimg.com/profile.jpg"
         },
@@ -85,7 +84,7 @@ describe("transformResponse", () => {
         hashtags: ["ai"]
       }
     });
-    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source|videoUrl|indices|id_str/);
+    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source|videoUrl|indices|id_str|description|location/);
   });
 
   it("keeps extended entities out by default and returns them when requested", () => {

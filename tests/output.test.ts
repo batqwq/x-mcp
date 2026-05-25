@@ -79,13 +79,13 @@ describe("transformResponse", () => {
         viewCount: 2536,
         media: [
           { type: "photo", url: "https://pbs.twimg.com/media/photo.jpg" },
-          { type: "video", url: "https://pbs.twimg.com/media/video.jpg", videoUrl: "https://video.twimg.com/high.mp4" }
+          { type: "video", url: "https://video.twimg.com/high.mp4" }
         ],
-        mentions: ["openai"],
+        mentions: [{ screenName: "openai", name: "OpenAI" }],
         hashtags: ["ai"]
       }
     });
-    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source/);
+    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source|videoUrl|indices|id_str/);
   });
 
   it("optimizes x_user_posts and deduplicates all tweet authors into a map", () => {
@@ -108,7 +108,12 @@ describe("transformResponse", () => {
         {
           id: "3",
           text: "again",
+          created_at: "Mon May 25 10:45:36 +0000 2026",
           author: { id: "157792279", name: "Raz", userName: "Raz_09_", followers: 2459 },
+          entities: {
+            media: [{ type: "photo", media_url_https: "https://pbs.twimg.com/media/outer.jpg" }],
+            user_mentions: [{ screen_name: "outer", name: "Outer Mention" }]
+          },
           retweetedTweet: {
             id: "4",
             text: "retweeted",
@@ -143,6 +148,7 @@ describe("transformResponse", () => {
         },
         {
           authorId: "157792279",
+          createdAt: "2026-05-25T10:45:36Z",
           retweetedTweet: {
             id: "4",
             text: "retweeted",
@@ -158,7 +164,7 @@ describe("transformResponse", () => {
 
   it("optimizes x_posts_search with the same list shape", () => {
     const output = transformResponse("x_posts_search", {
-      tweets: [{ id: "1", text: "search", author: { id: "42", userName: "searcher" }, isReply: true, inReplyToId: "0" }],
+      tweets: [{ id: "1", text: "search", conversationId: "1", author: { id: "42", userName: "searcher" }, isReply: true, inReplyToId: "0" }],
       hasMore: false,
       nextCursor: null,
       raw: {}
@@ -180,10 +186,11 @@ describe("transformResponse", () => {
             id_str: "10",
             full_text: "provider shaped",
             author_id_str: "99",
-            created_at: "2026-05-24T00:00:00Z",
+            created_at: "Mon May 25 10:45:36 +0000 2026",
             favorite_count: "6",
             views: { count: "100" },
             in_reply_to_status_id_str: "9",
+            conversation_id_str: "8",
             user: {
               id_str: "99",
               screen_name: "provider_user",
@@ -196,7 +203,19 @@ describe("transformResponse", () => {
               hashtags: [{ hashtag: "fallback" }]
             },
             extended_entities: {
-              media: [{ type: "photo", media_url_https: "https://pbs.twimg.com/media/extended.jpg" }]
+              media: [
+                { type: "photo", media_url_https: "https://pbs.twimg.com/media/extended.jpg" },
+                {
+                  type: "video",
+                  media_url_https: "https://pbs.twimg.com/media/video.jpg",
+                  video_info: {
+                    variants: [
+                      { content_type: "video/mp4", bitrate: 256000, url: "https://video.twimg.com/list-low.mp4" },
+                      { content_type: "video/mp4", bitrate: 1024000, url: "https://video.twimg.com/list-high.mp4" }
+                    ]
+                  }
+                }
+              ]
             }
           }
         ]
@@ -216,13 +235,14 @@ describe("transformResponse", () => {
           id: "10",
           text: "provider shaped",
           authorId: "99",
-          createdAt: "2026-05-24T00:00:00Z",
+          createdAt: "2026-05-25T10:45:36Z",
           likeCount: 6,
           viewCount: 100,
           isReply: true,
           inReplyToId: "9",
-          media: ["photo", "photo"],
-          mentions: ["someone"],
+          conversationId: "8",
+          media: ["photo", "video", "photo"],
+          mentions: [{ screenName: "someone", name: "Someone" }],
           hashtags: ["fallback"]
         }
       ]
@@ -251,6 +271,7 @@ describe("transformResponse", () => {
           id_str: "12",
           screen_name: "detail_user",
           statuses_count: "3",
+          created_at: "Mon May 25 10:45:36 +0000 2026",
           pinned_tweet_ids: ["11"]
         }
       }
@@ -259,6 +280,7 @@ describe("transformResponse", () => {
         id: "12",
         userName: "detail_user",
         statusesCount: 3,
+        createdAt: "2026-05-25T10:45:36Z",
         pinnedTweetIds: ["11"]
       }
     });

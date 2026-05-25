@@ -10,7 +10,7 @@ import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
 import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
-import { compactJsonText, createTransformedJsonToolResult, type XToolName } from "./output.js";
+import { compactJsonText, transformResponse, type XToolName } from "./output.js";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -103,7 +103,14 @@ export function createServer(service: XPostService = createXPostService()): McpS
 
 async function runTool<T>(toolName: XToolName, operation: () => Promise<T>): Promise<CallToolResult> {
   try {
-    return createTransformedJsonToolResult(toolName, await operation());
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(transformResponse(toolName, await operation()))
+        }
+      ]
+    };
   } catch (error) {
     return {
       isError: true,

@@ -36,6 +36,21 @@ const SLIM_AUTHOR_FIELDS = [
 
 const USER_INFO_EXTRA_FIELDS = ["favouritesCount", "statusesCount", "mediaCount", "createdAt", "pinnedTweetIds"] as const;
 
+const TWITTER_MONTHS: Record<string, number> = {
+  Jan: 0,
+  Feb: 1,
+  Mar: 2,
+  Apr: 3,
+  May: 4,
+  Jun: 5,
+  Jul: 6,
+  Aug: 7,
+  Sep: 8,
+  Oct: 9,
+  Nov: 10,
+  Dec: 11
+};
+
 export function createTransformedJsonToolResult(toolName: XToolName, value: unknown): CallToolResult {
   return {
     content: [
@@ -164,6 +179,7 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
     source.inReplyToTweetId
   );
   const isReply = source.isReply === true || (source.isReply !== false && Boolean(inReplyToId));
+  const conversationId = firstString(source.conversationId, source.conversation_id, source.conversation_id_str);
 
   return pruneValue({
     id,
@@ -180,7 +196,8 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
     bookmarkCount: firstNumber(source.bookmarkCount, source.bookmark_count, source.bookmarks),
     isReply: isReply ? true : undefined,
     inReplyToId: isReply ? inReplyToId : undefined,
-    media: normalizeMedia(source, !context.inlineAuthor),
+    conversationId: isReply && conversationId !== id ? conversationId : undefined,
+    media: normalizeMedia(source, context.inlineAuthor),
     mentions: normalizeMentions(source),
     hashtags: normalizeHashtags(source),
     quotedTweet: normalizeTweet(firstRecord(source.quotedTweet, source.quoted_tweet, source.quoted_status, source.quoted), context)
@@ -209,7 +226,7 @@ function normalizeAuthor(author: unknown, options: { includeUserInfoExtra: boole
     base.favouritesCount = firstNumber(source.favouritesCount, source.favoritesCount, source.favourites_count);
     base.statusesCount = firstNumber(source.statusesCount, source.statuses_count);
     base.mediaCount = firstNumber(source.mediaCount, source.media_count);
-    base.createdAt = firstString(source.createdAt, source.created_at);
+    base.createdAt = normalizeCreatedAt(firstString(source.createdAt, source.created_at));
     base.pinnedTweetIds = source.pinnedTweetIds ?? source.pinned_tweet_ids;
   }
 
@@ -249,7 +266,7 @@ function addAuthor(authors: Map<string, JsonRecord> | undefined, id: string | un
   return id;
 }
 
-function normalizeMedia(tweet: JsonRecord, compact: boolean): unknown[] {
+function normalizeMedia(tweet: JsonRecord, detail: boolean): unknown[] {
   const extendedEntities = asRecord(tweet.extendedEntities ?? tweet.extended_entities);
   const entities = asRecord(tweet.entities);
   const mediaItems = mergeArrays(extendedEntities?.media, entities?.media, tweet.media);
@@ -263,32 +280,36 @@ function normalizeMedia(tweet: JsonRecord, compact: boolean): unknown[] {
     }
 
     const type = firstString(media.type, media.mediaType, media.media_type);
-    const url = normalizeUrl(firstString(media.url, media.media_url_https, media.media_url, media.preview_image_url, media.previewImageUrl));
-    const videoUrl = isVideoType(type) ? firstString(media.videoUrl, media.video_url, bestVideoVariant(media.video_info)) : undefined;
-    const key = `${type ?? ""}:${url ?? ""}:${videoUrl ?? ""}`;
+    const url = normalizeUrl(
+      isVideoType(type)
+        ? firstString(bestVideoVariant(media.video_info), media.videoUrl, media.video_url, media.media_url_https, media.media_url, media.preview_image_url, media.previewImageUrl, media.url)
+        : firstString(media.media_url_https, media.media_url, media.preview_image_url, media.previewImageUrl, media.url)
+    );
+    const key = `${type ?? ""}:${url ?? ""}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
 
-    if (compact) {
+    if (!detail) {
       output.push(type ?? "media");
-    } else {
-      const normalized = pruneValue({ type, url, videoUrl }) as JsonRecord | undefined;
-      if (normalized) {
-        output.push(normalized);
-      }
+      continue;
+    }
+
+    const normalized = pruneValue({ type, url }) as JsonRecord | undefined;
+    if (normalized) {
+      output.push(normalized);
     }
   }
 
   return output;
 }
 
-function normalizeMentions(tweet: JsonRecord): string[] {
+function normalizeMentions(tweet: JsonRecord): JsonRecord[] {
   const entities = asRecord(tweet.entities);
   const mentionItems = mergeArrays(entities?.user_mentions, entities?.mentions, tweet.mentions);
   const seen = new Set<string>();
-  const output: string[] = [];
+  const output: JsonRecord[] = [];
 
   for (const item of mentionItems) {
     const mention = asRecord(item);
@@ -302,7 +323,13 @@ function normalizeMentions(tweet: JsonRecord): string[] {
     }
 
     seen.add(userName);
-    output.push(userName);
+    const normalized = pruneValue({
+      screenName: userName,
+      name: firstString(mention.name)
+    }) as JsonRecord | undefined;
+    if (normalized) {
+      output.push(normalized);
+    }
   }
 
   return output;
@@ -367,6 +394,20 @@ function normalizeCreatedAt(value: string | undefined): string | undefined {
 
   if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     return value;
+  }
+
+  const twitterDate = /^([A-Z][a-z]{2}) ([A-Z][a-z]{2})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) ([+-]\d{4}) (\d{4})$/.exec(value);
+  if (twitterDate) {
+    const [, , monthName, day, hour, minute, second, offset, year] = twitterDate;
+    const month = monthName ? TWITTER_MONTHS[monthName] : undefined;
+    if (month !== undefined && day && hour && minute && second && offset && year) {
+      const offsetSign = offset.startsWith("-") ? -1 : 1;
+      const offsetHours = Number(offset.slice(1, 3));
+      const offsetMinutes = Number(offset.slice(3, 5));
+      const timestamp = Date.UTC(Number(year), month, Number(day), Number(hour), Number(minute), Number(second));
+      const adjusted = timestamp - offsetSign * (offsetHours * 60 + offsetMinutes) * 60_000;
+      return new Date(adjusted).toISOString().replace(/\.000Z$/, "Z");
+    }
   }
 
   const date = new Date(value);

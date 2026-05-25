@@ -4,9 +4,14 @@ export type XToolName = "x_post_get" | "x_posts_search" | "x_user_info" | "x_use
 
 type JsonRecord = Record<string, unknown>;
 
+export interface TransformOptions {
+  readonly includeExtended?: boolean;
+}
+
 interface TweetTransformContext {
   readonly inlineAuthor: boolean;
   readonly authors?: Map<string, JsonRecord>;
+  readonly includeExtended: boolean;
 }
 
 interface PruneOptions {
@@ -51,12 +56,12 @@ const TWITTER_MONTHS: Record<string, number> = {
   Dec: 11
 };
 
-export function createTransformedJsonToolResult(toolName: XToolName, value: unknown): CallToolResult {
+export function createTransformedJsonToolResult(toolName: XToolName, value: unknown, options: TransformOptions = {}): CallToolResult {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(transformResponse(toolName, value))
+        text: JSON.stringify(transformResponse(toolName, value, options))
       }
     ]
   };
@@ -66,18 +71,21 @@ export function compactJsonText(value: unknown): string {
   return JSON.stringify(pruneValue(value) ?? {});
 }
 
-export function transformResponse(toolName: XToolName, rawData: unknown): unknown {
+export function transformResponse(toolName: XToolName, rawData: unknown, options: TransformOptions = {}): unknown {
   const data = asRecord(rawData);
+  const contextOptions = {
+    includeExtended: options.includeExtended === true
+  };
 
   switch (toolName) {
     case "x_post_get":
       return pruneValue({
-        tweet: normalizeTweet(findSingleTweet(data), { inlineAuthor: true })
-      }) ?? {};
+        tweet: normalizeTweet(findSingleTweet(data), { ...contextOptions, inlineAuthor: true })
+      }, { keepZero: contextOptions.includeExtended }) ?? {};
 
     case "x_posts_search":
     case "x_user_posts":
-      return transformTweetList(data);
+      return transformTweetList(data, contextOptions);
 
     case "x_user_info":
       return pruneValue({
@@ -89,10 +97,10 @@ export function transformResponse(toolName: XToolName, rawData: unknown): unknow
   }
 }
 
-function transformTweetList(data: JsonRecord | null): unknown {
+function transformTweetList(data: JsonRecord | null, options: Pick<TweetTransformContext, "includeExtended">): unknown {
   const authors = new Map<string, JsonRecord>();
   const tweets = findTweetArray(data)
-    .map((tweet) => normalizeTweet(tweet, { inlineAuthor: false, authors }))
+    .map((tweet) => normalizeTweet(tweet, { ...options, inlineAuthor: false, authors }))
     .filter((tweet): tweet is JsonRecord => isRecord(tweet));
 
   const authorsObject = Object.fromEntries(authors.entries());
@@ -102,7 +110,7 @@ function transformTweetList(data: JsonRecord | null): unknown {
     tweets,
     hasMore: data?.hasMore,
     nextCursor: data?.nextCursor
-  }) ?? {};
+  }, { keepZero: options.includeExtended }) ?? {};
 }
 
 function findSingleTweet(data: JsonRecord | null): unknown {
@@ -167,7 +175,7 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
       author: authorOutput,
       createdAt: normalizeCreatedAt(firstString(source.createdAt, source.created_at, source.creation_date)),
       retweetedTweet
-    }) as JsonRecord | undefined;
+    }, { keepZero: context.includeExtended }) as JsonRecord | undefined;
   }
 
   const id = firstString(source.id, source.id_str, source.tweetId, source.tweet_id);
@@ -200,8 +208,9 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
     media: normalizeMedia(source, context.inlineAuthor),
     mentions: normalizeMentions(source),
     hashtags: normalizeHashtags(source),
+    extendedEntities: context.includeExtended ? normalizeExtendedEntities(source) : undefined,
     quotedTweet: normalizeTweet(firstRecord(source.quotedTweet, source.quoted_tweet, source.quoted_status, source.quoted), context)
-  }) as JsonRecord | undefined;
+  }, { keepZero: context.includeExtended }) as JsonRecord | undefined;
 }
 
 function normalizeAuthor(author: unknown, options: { includeUserInfoExtra: boolean; slim?: boolean }): JsonRecord | undefined {
@@ -354,6 +363,15 @@ function normalizeHashtags(tweet: JsonRecord): string[] {
   return output;
 }
 
+function normalizeExtendedEntities(tweet: JsonRecord): unknown {
+  const extendedEntities = asRecord(tweet.extendedEntities ?? tweet.extended_entities);
+  if (!extendedEntities) {
+    return undefined;
+  }
+
+  return pruneValue(sanitizeFreeform(extendedEntities, { keepZero: true }), { keepZero: true });
+}
+
 function normalizeAccount(account: unknown): unknown {
   const source = asRecord(account);
   if (!source) {
@@ -365,12 +383,12 @@ function normalizeAccount(account: unknown): unknown {
   const canFlattenData =
     data && sourceKeys.every((key) => ["data", "status", "message", "msg", "code"].includes(key));
 
-  return pruneValue(sanitizeFreeform(canFlattenData ? data : source), { keepZero: true }) ?? {};
+  return pruneValue(sanitizeFreeform(canFlattenData ? data : source, { keepZero: true }), { keepZero: true }) ?? {};
 }
 
-function sanitizeFreeform(value: unknown): unknown {
+function sanitizeFreeform(value: unknown, options: PruneOptions = {}): unknown {
   if (Array.isArray(value)) {
-    return value.map(sanitizeFreeform);
+    return value.map((item) => sanitizeFreeform(item, options));
   }
 
   if (!isRecord(value)) {
@@ -382,9 +400,9 @@ function sanitizeFreeform(value: unknown): unknown {
     if (key === "raw" || key === "twitterUrl") {
       continue;
     }
-    output[key] = sanitizeFreeform(fieldValue);
+    output[key] = sanitizeFreeform(fieldValue, options);
   }
-  return output;
+  return pruneValue(output, options);
 }
 
 function normalizeCreatedAt(value: string | undefined): string | undefined {

@@ -39,6 +39,21 @@ const noisyTweet = {
     symbols: [],
     timestamps: []
   },
+  extended_entities: {
+    media: [
+      {
+        id_str: "extended-media-1",
+        type: "photo",
+        media_url_https: "https://pbs.twimg.com/media/photo.jpg",
+        focus_rects: [{ x: 0, y: 0, w: 100, h: 80 }],
+        media_results: {
+          result: {
+            id: "extended-result-1"
+          }
+        }
+      }
+    ]
+  },
   hashtags: [],
   symbols: [],
   timestamps: [],
@@ -103,5 +118,43 @@ describe("createServer tool output", () => {
     expect(text).not.toContain('"hashtags":[]');
     expect(text).not.toContain('"symbols":[]');
     expect(text).not.toContain('"timestamps":[]');
+  });
+
+  it("returns extended entities only when include_extended is true", async () => {
+    const server = createServer(service);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    servers.push(server);
+    clients.push(client);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const defaultResult = await client.callTool({ name: "x_posts_search", arguments: { query: "hello" } });
+    const defaultText = defaultResult.content[0]?.type === "text" ? defaultResult.content[0].text : "";
+    expect(defaultText).not.toMatch(/extendedEntities|focus_rects|media_results/);
+
+    const extendedResult = await client.callTool({
+      name: "x_posts_search",
+      arguments: { query: "hello", include_extended: true }
+    });
+    const extendedText = extendedResult.content[0]?.type === "text" ? extendedResult.content[0].text : "";
+    const extendedOutput = JSON.parse(extendedText) as { tweets: Array<{ extendedEntities?: unknown }> };
+
+    expect(extendedOutput.tweets[0]?.extendedEntities).toEqual({
+      media: [
+        {
+          id_str: "extended-media-1",
+          type: "photo",
+          media_url_https: "https://pbs.twimg.com/media/photo.jpg",
+          focus_rects: [{ x: 0, y: 0, w: 100, h: 80 }],
+          media_results: {
+            result: {
+              id: "extended-result-1"
+            }
+          }
+        }
+      ]
+    });
   });
 });

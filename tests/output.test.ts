@@ -88,6 +88,52 @@ describe("transformResponse", () => {
     expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source|videoUrl|indices|id_str/);
   });
 
+  it("keeps extended entities out by default and returns them when requested", () => {
+    const input = {
+      tweet: {
+        id: "30",
+        text: "with extended entities",
+        author: { id: "31", userName: "extended_user" },
+        extended_entities: {
+          media: [
+            {
+              id_str: "media-1",
+              type: "photo",
+              media_url_https: "https://pbs.twimg.com/media/extended-photo.jpg",
+              focus_rects: [{ x: 0, y: 0, w: 100, h: 80 }],
+              media_results: {
+                result: {
+                  id: "media-result-1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      raw: { duplicate: true }
+    };
+
+    expect(JSON.stringify(transformResponse("x_post_get", input))).not.toMatch(/extendedEntities|focus_rects|media_results/);
+
+    const output = transformResponse("x_post_get", input, { includeExtended: true }) as { tweet?: { extendedEntities?: unknown } };
+
+    expect(output.tweet?.extendedEntities).toEqual({
+      media: [
+        {
+          id_str: "media-1",
+          type: "photo",
+          media_url_https: "https://pbs.twimg.com/media/extended-photo.jpg",
+          focus_rects: [{ x: 0, y: 0, w: 100, h: 80 }],
+          media_results: {
+            result: {
+              id: "media-result-1"
+            }
+          }
+        }
+      ]
+    });
+  });
+
   it("optimizes x_user_posts and deduplicates all tweet authors into a map", () => {
     const input = {
       provider: "getxapi",

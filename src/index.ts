@@ -10,13 +10,14 @@ import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
 import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
-import { compactJsonText, transformResponse, type XToolName } from "./output.js";
+import { compactJsonText, transformResponse, type TransformOptions, type XToolName } from "./output.js";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const providerSchema = z.enum(PROVIDER_IDS).describe("Provider to use. Overrides X_POST_PROVIDER when supplied.");
 const queryTypeSchema = z.enum(["Latest", "Top"]).default("Latest").describe("Search result product/order.");
+const includeExtendedSchema = z.boolean().default(false).describe("Include raw extended entity details such as focus_rects and media_results. Defaults to false to keep tool output compact.");
 
 export function createServer(service: XPostService = createXPostService()): McpServer {
   const server = new McpServer({
@@ -31,11 +32,12 @@ export function createServer(service: XPostService = createXPostService()): McpS
       description: "Read one X/Twitter post by numeric tweet ID or x.com/twitter.com status URL.",
       inputSchema: {
         idOrUrl: z.string().min(1).describe("Numeric tweet ID, x.com status URL, or twitter.com status URL."),
+        include_extended: includeExtendedSchema,
         provider: providerSchema.optional()
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool("x_post_get", () => service.getPost(args))
+    async (args) => runTool("x_post_get", () => service.getPost(args), outputOptions(args))
   );
 
   server.registerTool(
@@ -47,11 +49,12 @@ export function createServer(service: XPostService = createXPostService()): McpS
         query: z.string().min(1).describe("Advanced search query, such as from:OpenAI AI or #crypto min_faves:100."),
         queryType: queryTypeSchema,
         cursor: z.string().optional().describe("Pagination cursor returned as nextCursor by a previous call."),
+        include_extended: includeExtendedSchema,
         provider: providerSchema.optional()
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool("x_posts_search", () => service.searchPosts(args))
+    async (args) => runTool("x_posts_search", () => service.searchPosts(args), outputOptions(args))
   );
 
   server.registerTool(
@@ -78,11 +81,12 @@ export function createServer(service: XPostService = createXPostService()): McpS
         userId: z.string().optional().describe("Numeric user ID. Required if userName is not supplied."),
         includeReplies: z.boolean().default(false).describe("Include replies authored by the user."),
         cursor: z.string().optional().describe("Pagination cursor returned as nextCursor by a previous call."),
+        include_extended: includeExtendedSchema,
         provider: providerSchema.optional()
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool("x_user_posts", () => service.getUserPosts(args))
+    async (args) => runTool("x_user_posts", () => service.getUserPosts(args), outputOptions(args))
   );
 
   server.registerTool(
@@ -101,13 +105,19 @@ export function createServer(service: XPostService = createXPostService()): McpS
   return server;
 }
 
-async function runTool<T>(toolName: XToolName, operation: () => Promise<T>): Promise<CallToolResult> {
+function outputOptions(args: { include_extended?: boolean }): TransformOptions {
+  return {
+    includeExtended: args.include_extended === true
+  };
+}
+
+async function runTool<T>(toolName: XToolName, operation: () => Promise<T>, options: TransformOptions = {}): Promise<CallToolResult> {
   try {
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify(transformResponse(toolName, await operation()))
+          text: JSON.stringify(transformResponse(toolName, await operation(), options))
         }
       ]
     };

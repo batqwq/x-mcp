@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EnvLike, ProviderId } from "./types.js";
@@ -51,8 +51,13 @@ export async function writeOnboardingState(state: OnboardingState, env: EnvLike 
   const filePath = onboardingStatePath(env);
   await mkdir(dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(tempPath, filePath);
+  try {
+    await chmod(filePath, 0o600);
+  } catch {
+    // Some filesystems do not support POSIX-style mode changes; the write still succeeded.
+  }
 }
 
 export async function touchOnboarding(state: OnboardingState, env: EnvLike = process.env): Promise<OnboardingState> {
@@ -143,4 +148,3 @@ export async function deleteOAuthClient(clientId: string, env: EnvLike = process
   await writeOnboardingState(next, env);
   return next;
 }
-

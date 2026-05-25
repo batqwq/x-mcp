@@ -10,8 +10,10 @@ import { createXPostService, type XPostService } from "./service.js";
 import { runTui } from "./tui.js";
 import { PROVIDER_IDS } from "./types.js";
 import { readOnboardingState, saveOAuthClient } from "./onboarding.js";
+import { compactJsonText, createTransformedJsonToolResult, type XToolName } from "./output.js";
 import { createServer as createHttpsServer } from "node:https";
 import { readFileSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 const providerSchema = z.enum(PROVIDER_IDS).describe("Provider to use. Overrides X_POST_PROVIDER when supplied.");
 const queryTypeSchema = z.enum(["Latest", "Top"]).default("Latest").describe("Search result product/order.");
@@ -33,7 +35,7 @@ export function createServer(service: XPostService = createXPostService()): McpS
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool(() => service.getPost(args))
+    async (args) => runTool("x_post_get", () => service.getPost(args))
   );
 
   server.registerTool(
@@ -49,7 +51,7 @@ export function createServer(service: XPostService = createXPostService()): McpS
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool(() => service.searchPosts(args))
+    async (args) => runTool("x_posts_search", () => service.searchPosts(args))
   );
 
   server.registerTool(
@@ -63,7 +65,7 @@ export function createServer(service: XPostService = createXPostService()): McpS
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool(() => service.getUserInfo(args))
+    async (args) => runTool("x_user_info", () => service.getUserInfo(args))
   );
 
   server.registerTool(
@@ -80,7 +82,7 @@ export function createServer(service: XPostService = createXPostService()): McpS
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool(() => service.getUserPosts(args))
+    async (args) => runTool("x_user_posts", () => service.getUserPosts(args))
   );
 
   server.registerTool(
@@ -93,37 +95,26 @@ export function createServer(service: XPostService = createXPostService()): McpS
       },
       annotations: { readOnlyHint: true }
     },
-    async (args) => runTool(() => service.getAccountInfo(args))
+    async (args) => runTool("x_account_info", () => service.getAccountInfo(args))
   );
 
   return server;
 }
 
-async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> {
+async function runTool<T>(toolName: XToolName, operation: () => Promise<T>): Promise<CallToolResult> {
   try {
-    return jsonResult(await operation());
+    return createTransformedJsonToolResult(toolName, await operation());
   } catch (error) {
     return {
       isError: true,
       content: [
         {
           type: "text",
-          text: JSON.stringify(serializeError(error), null, 2)
+          text: compactJsonText(serializeError(error))
         }
       ]
     };
   }
-}
-
-function jsonResult(value: unknown): CallToolResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(value, null, 2)
-      }
-    ]
-  };
 }
 
 function serializeError(error: unknown): Record<string, unknown> {
@@ -142,6 +133,74 @@ function serializeError(error: unknown): Record<string, unknown> {
     error: "UnknownError",
     message: String(error)
   };
+}
+
+function safeEqual(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isAuthorizedClient(
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+  oauthClients: Record<string, string>,
+  globalToken: string | undefined
+): boolean {
+  if (clientId && clientSecret) {
+    return safeEqual(clientSecret, oauthClients[clientId]) || safeEqual(clientSecret, globalToken);
+  }
+
+  return !clientId && safeEqual(clientSecret, globalToken);
+}
+
+function parseHost(value: string | undefined): { hostname: string; host: string; port: string } | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value.includes("://") ? value : `http://${value}`);
+    return {
+      hostname: url.hostname.toLowerCase(),
+      host: url.host.toLowerCase(),
+      port: url.port
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isAllowedHost(requestHost: string | undefined, allowedHosts: string[]): boolean {
+  if (allowedHosts.length === 0) {
+    return true;
+  }
+
+  const request = parseHost(requestHost);
+  if (!request) {
+    return false;
+  }
+
+  return allowedHosts.some((allowedHost) => {
+    const allowed = parseHost(allowedHost);
+    if (!allowed) {
+      return false;
+    }
+
+    return allowed.port ? request.host === allowed.host : request.hostname === allowed.hostname;
+  });
+}
+
+function maskSecret(secret: string): string {
+  if (secret.length <= 8) {
+    return "*".repeat(secret.length);
+  }
+
+  return `${secret.slice(0, 4)}...${secret.slice(-4)}`;
 }
 
 async function main(): Promise<void> {
@@ -248,9 +307,13 @@ export async function runSseServer(
   sslKey?: string,
   sslCert?: string
 ): Promise<{ close: () => Promise<void> }> {
-  const activeTransports = new Map<string, { transport: SSEServerTransport; clientId: string }>();
+  const activeTransports = new Map<string, { transport: SSEServerTransport; clientId: string; messageToken: string }>();
 
   // 1. 尝试配置原生的 HTTPS/TLS 证书
+  if ((sslKey && !sslCert) || (!sslKey && sslCert)) {
+    throw new Error("Both sslKey and sslCert are required to enable native HTTPS.");
+  }
+
   let sslOptions: { key: Buffer; cert: Buffer } | undefined;
   if (sslKey && sslCert) {
     try {
@@ -278,6 +341,12 @@ export async function runSseServer(
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Content-Security-Policy", "default-src 'none'");
 
+    const requestHost = typeof req.headers.host === "string" ? req.headers.host : "localhost";
+    if (!isAllowedHost(requestHost, allowedHosts)) {
+      res.writeHead(403, { "Content-Type": "text/plain" }).end("Forbidden: Host is not allowed");
+      return;
+    }
+
     // CORS 跨域防御
     const origin = req.headers.origin;
     if (origin) {
@@ -285,7 +354,7 @@ export async function runSseServer(
       if (allowedHosts.length > 0) {
         try {
           const originUrl = new URL(origin);
-          allowed = allowedHosts.includes(originUrl.host);
+          allowed = isAllowedHost(originUrl.host, allowedHosts);
         } catch {
           allowed = false;
         }
@@ -299,16 +368,15 @@ export async function runSseServer(
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "86400"
       }).end();
       return;
     }
 
-    const host = req.headers.host ?? "localhost";
     let parsedUrl: URL;
     try {
-      parsedUrl = new URL(req.url ?? "", `http://${host}`);
+      parsedUrl = new URL(req.url ?? "", `http://${requestHost}`);
     } catch {
       res.writeHead(400, { "Content-Type": "text/plain" }).end("Invalid Request URL");
       return;
@@ -351,18 +419,7 @@ export async function runSseServer(
     const { clientId, clientSecret } = extractCredentials(req, parsedUrl);
 
     // 鉴权判断逻辑
-    let isAuthorized = false;
-    if (clientId && clientSecret) {
-      if (oauthClients[clientId] === clientSecret) {
-        isAuthorized = true;
-      } else if (globalToken && clientSecret === globalToken) {
-        isAuthorized = true;
-      }
-    } else if (clientSecret && !clientId) {
-      if (globalToken && clientSecret === globalToken) {
-        isAuthorized = true;
-      }
-    }
+    const isAuthorized = isAuthorizedClient(clientId, clientSecret, oauthClients, globalToken);
 
     // 1. SSE 握手端点 (GET /sse)
     if (parsedUrl.pathname === "/sse" && req.method === "GET") {
@@ -371,8 +428,9 @@ export async function runSseServer(
         return;
       }
 
-      // 将授权凭证注入到 messageEndpoint 保证 POST 时也能防伪校验
-      const messageEndpoint = `/messages?client_id=${encodeURIComponent(clientId ?? "")}&client_secret=${encodeURIComponent(clientSecret ?? "")}`;
+      // Bind the message endpoint to this SSE session without echoing long-lived secrets in the URL.
+      const messageToken = randomBytes(32).toString("base64url");
+      const messageEndpoint = `/messages?session_token=${encodeURIComponent(messageToken)}`;
 
       const transport = new SSEServerTransport(messageEndpoint, res, {
         enableDnsRebindingProtection: allowedHosts.length > 0,
@@ -381,7 +439,7 @@ export async function runSseServer(
 
       const sessionId = transport.sessionId;
       // 强Session隔离：记录本 Session 的拥有者 Client ID
-      activeTransports.set(sessionId, { transport, clientId: clientId ?? "" });
+      activeTransports.set(sessionId, { transport, clientId: clientId ?? "", messageToken });
 
       transport.onclose = () => {
         activeTransports.delete(sessionId);
@@ -394,25 +452,27 @@ export async function runSseServer(
 
     // 2. 消息传送端点 (POST /messages)
     if (parsedUrl.pathname === "/messages" && req.method === "POST") {
-      if (!isAuthorized) {
-        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
-        return;
-      }
-
       const sessionId = parsedUrl.searchParams.get("sessionId");
       if (!sessionId) {
-        res.writeHead(400, { "Content-Type": "text/plain" }).end("Missing sessionId");
+        res.writeHead(isAuthorized ? 400 : 401, { "Content-Type": "text/plain" }).end(isAuthorized ? "Missing sessionId" : "Unauthorized");
         return;
       }
 
       const sessionData = activeTransports.get(sessionId);
       if (!sessionData) {
-        res.writeHead(404, { "Content-Type": "text/plain" }).end("Session not found");
+        res.writeHead(isAuthorized ? 404 : 401, { "Content-Type": "text/plain" }).end(isAuthorized ? "Session not found" : "Unauthorized");
+        return;
+      }
+
+      const sessionToken = parsedUrl.searchParams.get("session_token") ?? undefined;
+      const isSessionTokenAuthorized = safeEqual(sessionToken, sessionData.messageToken);
+      if (!isAuthorized && !isSessionTokenAuthorized) {
+        res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized");
         return;
       }
 
       // 强安全防卫：校验会话拥有者，彻底防御 session 越权跨客户端调用
-      if (sessionData.clientId !== (clientId ?? "")) {
+      if (isAuthorized && !isSessionTokenAuthorized && sessionData.clientId !== (clientId ?? "")) {
         res.writeHead(401, { "Content-Type": "text/plain" }).end("Unauthorized: Session owner mismatch");
         return;
       }
@@ -460,6 +520,7 @@ export async function runSseServer(
       }
       const displayClients = { ...oauthClientsParam, ...localClients };
       if (Object.keys(displayClients).length > 0) {
+        const printFullSecrets = process.env.__X_MCP_DAEMON_CHILD !== "true";
         console.log("\n==============================================================");
         if (sslOptions) {
           console.log("🔒 HTTPS SECURE MODE ACTIVE (原生 HTTPS 安全模式已启动):");
@@ -476,7 +537,10 @@ export async function runSseServer(
         for (const [cid, secret] of Object.entries(displayClients)) {
           console.log(`\n  [凭证对 #${idx++}]`);
           console.log(`  Client ID:       ${cid}`);
-          console.log(`  Client Secret:   ${secret}`);
+          console.log(`  Client Secret:   ${printFullSecrets ? secret : maskSecret(secret)}`);
+        }
+        if (!printFullSecrets) {
+          console.log("\n  Client secrets are redacted in daemon logs.");
         }
         console.log("==============================================================\n");
       } else {

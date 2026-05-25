@@ -37,6 +37,7 @@ import { runSseServer } from "../src/index.js";
 import type { XPostService } from "../src/service.js";
 import * as fs from "node:fs";
 import * as https from "node:https";
+import { request as httpRequest } from "node:http";
 
 const mockService: XPostService = {
   getPost: vi.fn(async () => ({ id: "123", text: "hello" })),
@@ -45,6 +46,26 @@ const mockService: XPostService = {
   getUserPosts: vi.fn(),
   getAccountInfo: vi.fn(),
 };
+
+function requestStatusWithHost(port: number, host: string, path = "/sse"): Promise<number | undefined> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: "localhost",
+        port,
+        path,
+        method: "GET",
+        headers: { Host: host }
+      },
+      (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 describe("SSE Remote Server - OAuth Client ID & Secret Basic Auth", () => {
   let sseServer: { close: () => Promise<void> };
@@ -80,7 +101,10 @@ describe("SSE Remote Server - OAuth Client ID & Secret Basic Auth", () => {
     const { value } = await reader.read();
     const text = new TextDecoder().decode(value);
     expect(text).toContain("event: endpoint");
-    expect(text).toContain("data: /messages?client_id=x-mcp-client-test&client_secret=x-mcp-secret-test&sessionId=");
+    expect(text).toContain("data: /messages?session_token=");
+    expect(text).toContain("sessionId=");
+    expect(text).not.toContain("client_secret");
+    expect(text).not.toContain("x-mcp-secret-test");
 
     await reader.cancel();
   });
@@ -98,7 +122,10 @@ describe("SSE Remote Server - OAuth Client ID & Secret Basic Auth", () => {
     const { value } = await reader.read();
     const text = new TextDecoder().decode(value);
     expect(text).toContain("event: endpoint");
-    expect(text).toContain("data: /messages?client_id=x-mcp-client-test&client_secret=x-mcp-secret-test&sessionId=");
+    expect(text).toContain("data: /messages?session_token=");
+    expect(text).toContain("sessionId=");
+    expect(text).not.toContain("client_secret");
+    expect(text).not.toContain("x-mcp-secret-test");
 
     await reader.cancel();
   });
@@ -125,6 +152,10 @@ describe("SSE Remote Server - OAuth Client ID & Secret Basic Auth", () => {
       }
     });
     expect(res3.status).toBe(401);
+  });
+
+  it("rejects requests whose Host header is not allowed", async () => {
+    await expect(requestStatusWithHost(port, "evil.example")).resolves.toBe(403);
   });
 });
 
@@ -158,14 +189,20 @@ describe("SSE Remote Server - POST /messages & Session Isolation", () => {
 
     const { value } = await reader.read();
     const sseText = new TextDecoder().decode(value);
-    const match = sseText.match(/sessionId=([a-f0-9-]+)/);
-    if (!match || !match[1]) {
+    const endpointMatch = sseText.match(/data: (\/messages[^\r\n]+)/);
+    if (!endpointMatch || !endpointMatch[1]) {
+      await reader.cancel();
+      throw new Error("Could not extract message endpoint");
+    }
+    const messageEndpoint = endpointMatch[1];
+    const endpointUrl = new URL(`http://localhost:${port}${messageEndpoint}`);
+    const sessionId = endpointUrl.searchParams.get("sessionId");
+    if (!sessionId) {
       await reader.cancel();
       throw new Error("Could not extract sessionId");
     }
-    const sessionId = match[1];
 
-    // 2. POST without credentials -> 401
+    // 2. POST without credentials or the per-session endpoint token -> 401
     const postRes1 = await fetch(`http://localhost:${port}/messages?sessionId=${sessionId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -185,7 +222,7 @@ describe("SSE Remote Server - POST /messages & Session Isolation", () => {
     });
     expect(postRes2.status).toBe(401);
 
-    // 4. POST with correct credentials (client-a) -> 202
+    // 4. POST with the per-session message endpoint token -> 202
     const msg = {
       jsonrpc: "2.0",
       method: "tools/call",
@@ -198,15 +235,25 @@ describe("SSE Remote Server - POST /messages & Session Isolation", () => {
       id: 1,
     };
 
-    const postRes3 = await fetch(`http://localhost:${port}/messages?sessionId=${sessionId}`, {
+    const postRes3 = await fetch(`http://localhost:${port}${messageEndpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(msg),
+    });
+    expect(postRes3.status).toBe(202);
+
+    // 5. POST with correct credentials (client-a) -> 202
+    const postRes4 = await fetch(`http://localhost:${port}/messages?sessionId=${sessionId}`, {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
         "Authorization": `Basic ${credentialsA}`
       },
-      body: JSON.stringify(msg),
+      body: JSON.stringify({ ...msg, id: 2 }),
     });
-    expect(postRes3.status).toBe(202);
+    expect(postRes4.status).toBe(202);
 
     await reader.cancel();
   });
@@ -221,5 +268,11 @@ describe("SSE Remote Server - HTTPS Native Mode", () => {
     
     // 正常执行关闭
     await sseServer.close();
+  });
+
+  it("rejects partial HTTPS configuration instead of falling back to HTTP", async () => {
+    await expect(
+      runSseServer(3010, [], mockService, { "client-id": "client-secret" }, undefined, "key.pem", undefined)
+    ).rejects.toThrow("Both sslKey and sslCert are required");
   });
 });

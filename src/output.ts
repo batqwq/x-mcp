@@ -11,12 +11,44 @@ export interface TransformOptions {
 interface TweetTransformContext {
   readonly inlineAuthor: boolean;
   readonly authors?: Map<string, JsonRecord>;
+  readonly includes?: IncludeState;
   readonly includeExtended: boolean;
+  readonly mediaCatalog?: MediaCatalog;
+  readonly rootTweetIds?: Set<string>;
+  readonly state: TransformState;
 }
 
 interface PruneOptions {
   readonly keepZero?: boolean;
 }
+
+interface TransformState {
+  hasStats: boolean;
+}
+
+interface IncludeState {
+  readonly tweets: JsonRecord[];
+  readonly tweetIds: Set<string>;
+}
+
+interface MediaCatalog {
+  readonly items: Map<string, JsonRecord>;
+  readonly keys: Map<string, string>;
+  nextId: number;
+}
+
+interface NormalizedMedia {
+  readonly type?: string;
+  readonly url?: string;
+  readonly key?: string;
+}
+
+interface MediaOutput {
+  readonly media?: unknown;
+  readonly mediaIds?: string[];
+}
+
+const STAT_KEYS = ["like", "rt", "reply", "quote", "view", "bm"] as const;
 
 const TWEET_AUTHOR_FIELDS = [
   "id",
@@ -29,15 +61,6 @@ const TWEET_AUTHOR_FIELDS = [
 ] as const;
 
 const USER_INFO_FIELDS = TWEET_AUTHOR_FIELDS;
-
-const SLIM_AUTHOR_FIELDS = [
-  "id",
-  "name",
-  "userName",
-  "followers",
-  "following",
-  "isBlueVerified"
-] as const;
 
 const USER_INFO_EXTRA_FIELDS = ["favouritesCount", "statusesCount", "mediaCount", "createdAt", "pinnedTweetIds"] as const;
 
@@ -78,10 +101,20 @@ export function transformResponse(toolName: XToolName, rawData: unknown, options
   };
 
   switch (toolName) {
-    case "x_post_get":
-      return pruneValue({
-        tweet: normalizeTweet(findSingleTweet(data), { ...contextOptions, inlineAuthor: true })
-      }, { keepZero: contextOptions.includeExtended }) ?? {};
+    case "x_post_get": {
+      const tweetSource = findSingleTweet(data);
+      const state = createTransformState();
+      const includes = createIncludeState();
+      const tweetId = getTweetId(tweetSource);
+      const tweet = normalizeTweet(tweetSource, {
+        ...contextOptions,
+        inlineAuthor: true,
+        includes,
+        rootTweetIds: tweetId ? new Set([tweetId]) : undefined,
+        state
+      });
+      return finalizeTweetResponse({ tweet }, state, { includes, keepZero: contextOptions.includeExtended });
+    }
 
     case "x_posts_search":
     case "x_user_posts":
@@ -98,19 +131,52 @@ export function transformResponse(toolName: XToolName, rawData: unknown, options
 }
 
 function transformTweetList(data: JsonRecord | null, options: Pick<TweetTransformContext, "includeExtended">): unknown {
+  const tweetSources = findTweetArray(data);
+  const state = createTransformState();
   const authors = new Map<string, JsonRecord>();
-  const tweets = findTweetArray(data)
-    .map((tweet) => normalizeTweet(tweet, { ...options, inlineAuthor: false, authors }))
+  const includes = createIncludeState();
+  const mediaCatalog = createMediaCatalog();
+  const rootTweetIds = new Set(tweetSources.map(getTweetId).filter((id): id is string => Boolean(id)));
+  const tweets = tweetSources
+    .map((tweet) => normalizeTweet(tweet, { ...options, inlineAuthor: false, authors, includes, mediaCatalog, rootTweetIds, state }))
     .filter((tweet): tweet is JsonRecord => isRecord(tweet));
 
   const authorsObject = Object.fromEntries(authors.entries());
 
-  return pruneValue({
+  return finalizeTweetResponse({
     authors: authorsObject,
     tweets,
     hasMore: data?.hasMore,
     nextCursor: data?.nextCursor
-  }, { keepZero: options.includeExtended }) ?? {};
+  }, state, { includes, mediaCatalog, keepZero: options.includeExtended });
+}
+
+function createTransformState(): TransformState {
+  return { hasStats: false };
+}
+
+function createIncludeState(): IncludeState {
+  return { tweets: [], tweetIds: new Set<string>() };
+}
+
+function createMediaCatalog(): MediaCatalog {
+  return { items: new Map<string, JsonRecord>(), keys: new Map<string, string>(), nextId: 1 };
+}
+
+function finalizeTweetResponse(
+  body: JsonRecord,
+  state: TransformState,
+  options: { includes?: IncludeState; mediaCatalog?: MediaCatalog; keepZero: boolean }
+): unknown {
+  const includes = options.includes && options.includes.tweets.length > 0 ? { tweets: options.includes.tweets } : undefined;
+  const media = options.mediaCatalog && options.mediaCatalog.items.size > 0 ? Object.fromEntries(options.mediaCatalog.items.entries()) : undefined;
+
+  return pruneValue({
+    statKeys: state.hasStats ? STAT_KEYS : undefined,
+    media,
+    ...body,
+    includes
+  }, { keepZero: options.keepZero }) ?? {};
 }
 
 function findSingleTweet(data: JsonRecord | null): unknown {
@@ -130,6 +196,55 @@ function findTweetArray(data: JsonRecord | null): unknown[] {
   const dataRecord = asRecord(data?.data);
   const rawData = asRecord(raw?.data);
   return firstNonEmptyArray(data?.tweets, dataRecord?.tweets, rawData?.tweets, raw?.tweets, data?.data) ?? [];
+}
+
+function getTweetId(tweet: unknown): string | undefined {
+  const source = asRecord(tweet);
+  return firstString(source?.id, source?.id_str, source?.tweetId, source?.tweet_id);
+}
+
+function normalizeStats(source: JsonRecord, state: TransformState): number[] | undefined {
+  const stats = [
+    firstNumber(source.likeCount, source.favoriteCount, source.favorite_count, source.favourites_count, source.likes) ?? 0,
+    firstNumber(source.retweetCount, source.retweet_count, source.retweets) ?? 0,
+    firstNumber(source.replyCount, source.reply_count, source.replies) ?? 0,
+    firstNumber(source.quoteCount, source.quote_count, source.quotes) ?? 0,
+    firstNumber(source.viewCount, source.view_count, source.views, asRecord(source.views)?.count) ?? 0,
+    firstNumber(source.bookmarkCount, source.bookmark_count, source.bookmarks) ?? 0
+  ];
+
+  while (stats.length > 0 && stats[stats.length - 1] === 0) {
+    stats.pop();
+  }
+
+  if (stats.length === 0) {
+    return undefined;
+  }
+
+  state.hasStats = true;
+  return stats;
+}
+
+function addIncludedTweet(tweet: unknown, context: TweetTransformContext): string | undefined {
+  const id = getTweetId(tweet);
+  if (!id) {
+    return undefined;
+  }
+
+  if (context.rootTweetIds?.has(id)) {
+    return id;
+  }
+
+  if (!context.includes || context.includes.tweetIds.has(id)) {
+    return id;
+  }
+
+  context.includes.tweetIds.add(id);
+  const normalized = normalizeTweet(tweet, context);
+  if (normalized) {
+    context.includes.tweets.push(normalized);
+  }
+  return id;
 }
 
 function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRecord | undefined {
@@ -153,7 +268,7 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
     authorSource?.userId,
     authorSource?.user_id
   );
-  const author = normalizeAuthor(authorSource, { includeUserInfoExtra: false, slim: !context.inlineAuthor });
+  const author = normalizeAuthor(authorSource, { includeUserInfoExtra: false });
   const authorUserName = stringField(author, "userName");
 
   let authorOutput: unknown;
@@ -168,13 +283,16 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
     }
   }
 
-  const retweetedTweet = normalizeTweet(firstRecord(source.retweetedTweet, source.retweeted_tweet, source.retweeted_status, source.retweeted), context);
-  if (retweetedTweet) {
+  const retweetedTweetSource = firstRecord(source.retweetedTweet, source.retweeted_tweet, source.retweeted_status, source.retweeted);
+  if (retweetedTweetSource) {
+    const srcId = addIncludedTweet(retweetedTweetSource, context);
     return pruneValue({
+      type: "rt",
       authorId: authorIdOutput,
       author: authorOutput,
       createdAt: normalizeCreatedAt(firstString(source.createdAt, source.created_at, source.creation_date)),
-      retweetedTweet
+      srcId,
+      src: srcId ? undefined : normalizeTweet(retweetedTweetSource, context)
     }, { keepZero: context.includeExtended }) as JsonRecord | undefined;
   }
 
@@ -188,32 +306,34 @@ function normalizeTweet(tweet: unknown, context: TweetTransformContext): JsonRec
   );
   const isReply = source.isReply === true || (source.isReply !== false && Boolean(inReplyToId));
   const conversationId = firstString(source.conversationId, source.conversation_id, source.conversation_id_str);
+  const stats = normalizeStats(source, context.state);
+  const media = normalizeTweetMedia(source, context);
+  const quotedTweetSource = firstRecord(source.quotedTweet, source.quoted_tweet, source.quoted_status, source.quoted);
+  const quotedTweetId = quotedTweetSource ? addIncludedTweet(quotedTweetSource, context) : undefined;
 
   return pruneValue({
+    type: quotedTweetSource ? "qt" : undefined,
     id,
     url: (context.inlineAuthor || !id) ? normalizeUrl(firstString(source.url, source.twitterUrl) ?? buildTweetUrl(authorUserName, id)) : undefined,
     text: firstString(source.text, source.fullText, source.full_text),
     authorId: authorIdOutput,
     author: authorOutput,
     createdAt: normalizeCreatedAt(firstString(source.createdAt, source.created_at, source.creation_date)),
-    likeCount: firstNumber(source.likeCount, source.favoriteCount, source.favorite_count, source.favourites_count, source.likes),
-    retweetCount: firstNumber(source.retweetCount, source.retweet_count, source.retweets),
-    replyCount: firstNumber(source.replyCount, source.reply_count, source.replies),
-    quoteCount: firstNumber(source.quoteCount, source.quote_count, source.quotes),
-    viewCount: firstNumber(source.viewCount, source.view_count, source.views, asRecord(source.views)?.count),
-    bookmarkCount: firstNumber(source.bookmarkCount, source.bookmark_count, source.bookmarks),
+    stats,
     isReply: isReply ? true : undefined,
     inReplyToId: isReply ? inReplyToId : undefined,
     conversationId: isReply && conversationId !== id ? conversationId : undefined,
-    media: normalizeMedia(source, context.inlineAuthor),
+    media: media.media,
+    mediaIds: media.mediaIds,
     mentions: normalizeMentions(source),
     hashtags: normalizeHashtags(source),
     extendedEntities: context.includeExtended ? normalizeExtendedEntities(source) : undefined,
-    quotedTweet: normalizeTweet(firstRecord(source.quotedTweet, source.quoted_tweet, source.quoted_status, source.quoted), context)
+    quotedTweetId,
+    quotedTweet: quotedTweetSource && !quotedTweetId ? normalizeTweet(quotedTweetSource, context) : undefined
   }, { keepZero: context.includeExtended }) as JsonRecord | undefined;
 }
 
-function normalizeAuthor(author: unknown, options: { includeUserInfoExtra: boolean; slim?: boolean }): JsonRecord | undefined {
+function normalizeAuthor(author: unknown, options: { includeUserInfoExtra: boolean }): JsonRecord | undefined {
   const source = asRecord(author);
   if (!source) {
     return undefined;
@@ -239,19 +359,12 @@ function normalizeAuthor(author: unknown, options: { includeUserInfoExtra: boole
     base.pinnedTweetIds = source.pinnedTweetIds ?? source.pinned_tweet_ids;
   }
 
-  return pruneValue(pickKnownFields(base, options.includeUserInfoExtra, options.slim ?? false)) as JsonRecord | undefined;
+  return pruneValue(pickKnownFields(base, options.includeUserInfoExtra)) as JsonRecord | undefined;
 }
 
-function pickKnownFields(source: JsonRecord, includeUserInfoExtra: boolean, slim: boolean): JsonRecord {
+function pickKnownFields(source: JsonRecord, includeUserInfoExtra: boolean): JsonRecord {
   const output: JsonRecord = {};
-  let fields: readonly string[];
-  if (slim) {
-    fields = SLIM_AUTHOR_FIELDS;
-  } else if (includeUserInfoExtra) {
-    fields = [...USER_INFO_FIELDS, ...USER_INFO_EXTRA_FIELDS];
-  } else {
-    fields = TWEET_AUTHOR_FIELDS;
-  }
+  const fields: readonly string[] = includeUserInfoExtra ? [...USER_INFO_FIELDS, ...USER_INFO_EXTRA_FIELDS] : TWEET_AUTHOR_FIELDS;
   for (const field of fields) {
     output[field] = source[field];
   }
@@ -267,7 +380,8 @@ function addAuthor(authors: Map<string, JsonRecord> | undefined, id: string | un
     const authorWithoutId = { ...author };
     delete authorWithoutId.id;
     const existing = authors.get(id);
-    authors.set(id, pruneValue({ ...existing, ...authorWithoutId }) as JsonRecord);
+    const merged = pruneValue({ ...existing, ...authorWithoutId }) as JsonRecord | undefined;
+    authors.set(id, merged ?? {});
   } else if (!authors.has(id)) {
     authors.set(id, {});
   }
@@ -275,12 +389,49 @@ function addAuthor(authors: Map<string, JsonRecord> | undefined, id: string | un
   return id;
 }
 
-function normalizeMedia(tweet: JsonRecord, detail: boolean): unknown[] {
+function normalizeTweetMedia(tweet: JsonRecord, context: TweetTransformContext): MediaOutput {
+  const mediaItems = collectMedia(tweet);
+  if (mediaItems.length === 0) {
+    return {};
+  }
+
+  if (context.mediaCatalog && mediaItems.some((item) => item.url)) {
+    const mediaIds: string[] = [];
+    const seenMediaIds = new Set<string>();
+    const typeOnly: string[] = [];
+
+    for (const item of mediaItems) {
+      if (item.url) {
+        const mediaId = addMedia(context.mediaCatalog, item);
+        if (!seenMediaIds.has(mediaId)) {
+          seenMediaIds.add(mediaId);
+          mediaIds.push(mediaId);
+        }
+      } else {
+        typeOnly.push(item.type ?? "media");
+      }
+    }
+
+    return {
+      media: compactMediaTypes(typeOnly),
+      mediaIds: mediaIds.length > 0 ? mediaIds : undefined
+    };
+  }
+
+  if (context.inlineAuthor) {
+    const detailed = mediaItems.map((item) => pruneValue({ type: item.type, url: item.url }) as JsonRecord | undefined).filter((item): item is JsonRecord => Boolean(item));
+    return { media: detailed.length > 0 ? detailed : compactMediaTypes(mediaItems.map((item) => item.type ?? "media")) };
+  }
+
+  return { media: compactMediaTypes(mediaItems.map((item) => item.type ?? "media")) };
+}
+
+function collectMedia(tweet: JsonRecord): NormalizedMedia[] {
   const extendedEntities = asRecord(tweet.extendedEntities ?? tweet.extended_entities);
   const entities = asRecord(tweet.entities);
   const mediaItems = mergeArrays(extendedEntities?.media, entities?.media, tweet.media);
   const seen = new Set<string>();
-  const output: unknown[] = [];
+  const output: NormalizedMedia[] = [];
 
   for (const item of mediaItems) {
     const media = asRecord(item);
@@ -294,24 +445,49 @@ function normalizeMedia(tweet: JsonRecord, detail: boolean): unknown[] {
         ? firstString(bestVideoVariant(media.video_info), media.videoUrl, media.video_url, media.media_url_https, media.media_url, media.preview_image_url, media.previewImageUrl, media.url)
         : firstString(media.media_url_https, media.media_url, media.preview_image_url, media.previewImageUrl, media.url)
     );
-    const key = `${type ?? ""}:${url ?? ""}`;
-    if (seen.has(key)) {
+    const key = firstString(media.id, media.id_str, media.media_key, media.mediaKey) ?? (url ? `${type ?? ""}:${url}` : undefined);
+    if (key && seen.has(key)) {
       continue;
     }
-    seen.add(key);
-
-    if (!detail) {
-      output.push(type ?? "media");
-      continue;
+    if (key) {
+      seen.add(key);
     }
 
-    const normalized = pruneValue({ type, url }) as JsonRecord | undefined;
-    if (normalized) {
-      output.push(normalized);
-    }
+    output.push({ type: type ?? "media", url, key });
   }
 
   return output;
+}
+
+function compactMediaTypes(types: string[]): unknown {
+  if (types.length === 0) {
+    return undefined;
+  }
+
+  const counts: Record<string, number> = {};
+  for (const type of types) {
+    counts[type] = (counts[type] ?? 0) + 1;
+  }
+
+  const entries = Object.entries(counts);
+  if (entries.length === 1 && entries[0]?.[1] === 1) {
+    return entries[0][0];
+  }
+
+  return counts;
+}
+
+function addMedia(catalog: MediaCatalog, media: NormalizedMedia): string {
+  const key = `${media.type ?? ""}:${media.url ?? ""}`;
+  const existing = catalog.keys.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const id = `m${catalog.nextId++}`;
+  catalog.keys.set(key, id);
+  catalog.items.set(id, pruneValue({ type: media.type, url: media.url }) as JsonRecord);
+  return id;
 }
 
 function normalizeMentions(tweet: JsonRecord): JsonRecord[] {
@@ -475,7 +651,7 @@ function pruneValue(value: unknown, options: PruneOptions = {}): unknown {
   }
 
   if (Array.isArray(value)) {
-    const output = value.map((item) => pruneValue(item, options)).filter((item) => item !== undefined);
+    const output = value.map((item) => (typeof item === "number" ? item : pruneValue(item, options))).filter((item) => item !== undefined);
     return output.length > 0 ? output : undefined;
   }
 

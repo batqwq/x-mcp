@@ -98,6 +98,9 @@ describe("createServer tool output", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(JSON.parse(text)).toEqual({
+      media: {
+        m1: { type: "photo", url: "https://pbs.twimg.com/media/photo.jpg" }
+      },
       authors: {
         "42": { name: "Example", userName: "example", followers: 10 }
       },
@@ -107,7 +110,7 @@ describe("createServer tool output", () => {
           text: "hello",
           authorId: "42",
           createdAt: "2026-05-25T10:45:36Z",
-          media: ["photo"],
+          mediaIds: ["m1"],
           mentions: [{ screenName: "mentioned", name: "Mentioned User" }]
         }
       ]

@@ -62,6 +62,7 @@ describe("transformResponse", () => {
     const output = transformResponse("x_post_get", input);
 
     expect(output).toEqual({
+      statKeys: ["like", "rt", "reply", "quote", "view", "bm"],
       tweet: {
         id: "20578496591",
         url: "https://x.com/Raz_09_/status/20578496591",
@@ -74,8 +75,7 @@ describe("transformResponse", () => {
           profilePicture: "https://pbs.twimg.com/profile.jpg"
         },
         createdAt: "2026-05-22T15:42:46Z",
-        likeCount: 5,
-        viewCount: 2536,
+        stats: [5, 0, 0, 0, 2536],
         media: [
           { type: "photo", url: "https://pbs.twimg.com/media/photo.jpg" },
           { type: "video", url: "https://video.twimg.com/high.mp4" }
@@ -84,7 +84,7 @@ describe("transformResponse", () => {
         hashtags: ["ai"]
       }
     });
-    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|inReplyToId|lang|source|videoUrl|indices|id_str|description|location/);
+    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|extendedEntities|retweetCount|replyCount|quoteCount|bookmarkCount|likeCount|viewCount|inReplyToId|lang|source|videoUrl|indices|id_str|description|location/);
   });
 
   it("keeps extended entities out by default and returns them when requested", () => {
@@ -174,6 +174,7 @@ describe("transformResponse", () => {
     const output = transformResponse("x_user_posts", input);
 
     expect(output).toEqual({
+      statKeys: ["like", "rt", "reply", "quote", "view", "bm"],
       authors: {
         "157792279": { name: "Raz", userName: "Raz_09_", followers: 2459 },
         "194084670": { name: "White", userName: "white", followers: 100 },
@@ -182,29 +183,37 @@ describe("transformResponse", () => {
       tweets: [
         {
           id: "1",
+          type: "qt",
           text: "top",
           authorId: "157792279",
-          viewCount: 10,
-          quotedTweet: {
+          stats: [0, 0, 0, 0, 10],
+          quotedTweetId: "2"
+        },
+        {
+          type: "rt",
+          authorId: "157792279",
+          createdAt: "2026-05-25T10:45:36Z",
+          srcId: "4"
+        }
+      ],
+      includes: {
+        tweets: [
+          {
             id: "2",
             text: "quote",
             authorId: "194084670"
-          }
-        },
-        {
-          authorId: "157792279",
-          createdAt: "2026-05-25T10:45:36Z",
-          retweetedTweet: {
+          },
+          {
             id: "4",
             text: "retweeted",
             authorId: "777"
           }
-        }
-      ],
+        ]
+      },
       hasMore: true,
       nextCursor: "cursor-1"
     });
-    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|type|likeCount/);
+    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|likeCount|viewCount|retweetedTweet|"quotedTweet":/);
   });
 
   it("optimizes x_posts_search with the same list shape", () => {
@@ -269,10 +278,17 @@ describe("transformResponse", () => {
     });
 
     expect(output).toEqual({
+      statKeys: ["like", "rt", "reply", "quote", "view", "bm"],
+      media: {
+        m1: { type: "photo", url: "https://pbs.twimg.com/media/extended.jpg" },
+        m2: { type: "video", url: "https://video.twimg.com/list-high.mp4" },
+        m3: { type: "photo", url: "https://pbs.twimg.com/media/entity.jpg" }
+      },
       authors: {
         "99": {
           userName: "provider_user",
-          followers: 7
+          followers: 7,
+          profilePicture: "https://pbs.twimg.com/profile_normal.jpg"
         }
       },
       tweets: [
@@ -281,17 +297,99 @@ describe("transformResponse", () => {
           text: "provider shaped",
           authorId: "99",
           createdAt: "2026-05-25T10:45:36Z",
-          likeCount: 6,
-          viewCount: 100,
+          stats: [6, 0, 0, 0, 100],
           isReply: true,
           inReplyToId: "9",
           conversationId: "8",
-          media: ["photo", "video", "photo"],
+          mediaIds: ["m1", "m2", "m3"],
           mentions: [{ screenName: "someone", name: "Someone" }],
           hashtags: ["fallback"]
         }
       ]
     });
+  });
+
+  it("compresses type-only media and truncates only trailing zero stats", () => {
+    const output = transformResponse("x_posts_search", {
+      tweets: [
+        {
+          id: "type-media",
+          text: "media counts",
+          author: { id: "author-1", name: "Author One" },
+          likeCount: 15,
+          retweetCount: 1,
+          replyCount: 0,
+          quoteCount: 0,
+          viewCount: 0,
+          bookmarkCount: 0,
+          media: [
+            { type: "photo" },
+            { type: "photo" },
+            { type: "video" }
+          ]
+        }
+      ]
+    });
+
+    expect(output).toEqual({
+      statKeys: ["like", "rt", "reply", "quote", "view", "bm"],
+      authors: {
+        "author-1": { name: "Author One" }
+      },
+      tweets: [
+        {
+          id: "type-media",
+          text: "media counts",
+          authorId: "author-1",
+          stats: [15, 1],
+          media: { photo: 2, video: 1 }
+        }
+      ]
+    });
+  });
+
+  it("references quoted tweets already present in the same response without duplicating them", () => {
+    const output = transformResponse("x_posts_search", {
+      tweets: [
+        {
+          id: "1",
+          text: "quoting",
+          author: { id: "10", userName: "quoter" },
+          quotedTweet: {
+            id: "2",
+            text: "already present",
+            author: { id: "20", userName: "quoted" }
+          }
+        },
+        {
+          id: "2",
+          text: "already present",
+          author: { id: "20", userName: "quoted" }
+        }
+      ]
+    });
+
+    expect(output).toEqual({
+      authors: {
+        "10": { userName: "quoter" },
+        "20": { userName: "quoted" }
+      },
+      tweets: [
+        {
+          type: "qt",
+          id: "1",
+          text: "quoting",
+          authorId: "10",
+          quotedTweetId: "2"
+        },
+        {
+          id: "2",
+          text: "already present",
+          authorId: "20"
+        }
+      ]
+    });
+    expect(JSON.stringify(output)).not.toContain("includes");
   });
 
   it("can transform raw provider detail and user-info data wrappers", () => {

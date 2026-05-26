@@ -359,6 +359,8 @@ describe("transformResponse", () => {
         id: "157792279",
         name: "Raz",
         userName: "Raz_09_",
+        description: "drop profile bio",
+        location: "drop profile location",
         followersCount: 2459,
         followingCount: 51,
         isBlueVerified: true,
@@ -391,7 +393,7 @@ describe("transformResponse", () => {
         pinnedTweetIds: ["10"]
       }
     });
-    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|isVerified/);
+    expect(JSON.stringify(output)).not.toMatch(/raw|twitterUrl|entities|isVerified|description|location/);
   });
 
   it("optimizes x_account_info as a flat account object", () => {

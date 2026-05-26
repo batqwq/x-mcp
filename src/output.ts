@@ -28,11 +28,7 @@ const TWEET_AUTHOR_FIELDS = [
   "profilePicture"
 ] as const;
 
-const USER_INFO_FIELDS = [
-  ...TWEET_AUTHOR_FIELDS,
-  "description",
-  "location"
-] as const;
+const USER_INFO_FIELDS = TWEET_AUTHOR_FIELDS;
 
 const SLIM_AUTHOR_FIELDS = [
   "id",
